@@ -16,6 +16,7 @@ type WebhookHandler struct {
 func NewHandler(secret []byte) *WebhookHandler {
 	return &WebhookHandler{
 		Secret: secret,
+		Client: NewClient(),
 	}
 }
 
@@ -33,11 +34,11 @@ func (h *WebhookHandler) HandleGithub(c echo.Context) error {
 	case *github.PushEvent:
 		_, err := h.Client.HandlePushEvent(event)
 		if err != nil {
-			return c.NoContent(http.StatusAccepted)
+			return err
 		}
-		return err
+		return c.NoContent(http.StatusAccepted)
 	case *github.PingEvent:
-		return c.NoContent(http.StatusOK)
+		return c.String(http.StatusOK, "Got ping event")
 	}
 	return errors.New("Not understood")
 }
