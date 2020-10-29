@@ -29,7 +29,7 @@ func main() {
 
 	e := echo.New()
 	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-		Skipper: func(c echo.Context) bool { return c.Path() != "/" },
+		Skipper: func(c echo.Context) bool { return c.Path() == "/" },
 	}))
 	e.POST("/github", handler.HandleGithub)
 	e.GET("/", func(c echo.Context) error {
