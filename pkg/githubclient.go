@@ -32,9 +32,6 @@ func NewClient(tc *http.Client) Client {
 }
 
 func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) {
-
-	fmt.Printf("Handling push event to %s on %s\n", ev.GetRepo().GetFullName(), ev.GetRef())
-
 	owner := ev.GetRepo().GetOwner().GetName()
 	repo := ev.GetRepo().GetName()
 	pushed := strings.TrimPrefix(ev.GetRef(), "refs/heads/")
@@ -43,7 +40,6 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 	if pushed != master {
 		return nil, nil
 	}
-	fmt.Printf("Master branch pushed. pre-release scheduled...\n")
 
 	release, _, err := c.client.Repositories.GetLatestRelease(context.TODO(), owner, repo)
 	if err != nil {
@@ -87,9 +83,7 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 				continue
 			}
 			if con.Check(n) {
-				fmt.Print(n.Prerelease())
 				result := c.rcRegex.FindStringSubmatch(n.Prerelease())
-				fmt.Print(result)
 				next, err := strconv.Atoi(result[1])
 				if err != nil {
 					return nil, err
@@ -106,8 +100,6 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 	}
 	nextTag := fmt.Sprintf("v%v-rc.%d", v.IncPatch(), rc)
 
-	fmt.Printf("I'm going to create a release called %v", nextTag)
-
 	c.client.Repositories.CreateRelease(context.TODO(), owner, repo, &github.RepositoryRelease{
 		TagName:         github.String(nextTag),
 		Prerelease:      github.Bool(true),
@@ -115,7 +107,7 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 		TargetCommitish: ev.After,
 	})
 
-	return nil, nil
+	return nextTag, nil
 }
 
 func (c *ClientImpl) getPulls(owner, repo string, commits []*github.RepositoryCommit) (map[int]*github.PullRequest, error) {
