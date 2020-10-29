@@ -13,22 +13,29 @@ import (
 	"github.com/google/go-github/v32/github"
 )
 
+var (
+	candidateRx, changelogRx *regexp.Regexp
+)
+
 type Client interface {
 	HandlePushEvent(*github.PushEvent) (interface{}, error)
 }
 
 type ClientImpl struct {
-	client  *github.Client
-	rcRegex *regexp.Regexp
+	client *github.Client
 }
 
 func NewClient(tc *http.Client) Client {
 	cl := github.NewClient(tc)
 
 	return &ClientImpl{
-		client:  cl,
-		rcRegex: regexp.MustCompile("^rc.(?P<candidate>[0-9]+)$"),
+		client: cl,
 	}
+}
+
+func init() {
+	changelogRx = regexp.MustCompile("```release-note\\r\\n([\\s\\S]*?)\\r\\n```")
+	candidateRx = regexp.MustCompile("^rc.(?P<candidate>[0-9]+)$")
 }
 
 func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) {
@@ -54,8 +61,13 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 
 	pulls, err := c.getPulls(owner, repo, comparison.Commits)
 
+	logentries := []string{}
 	for _, pull := range pulls {
-		pull.GetBody()
+		matches := changelogRx.FindStringSubmatch(pull.GetBody())
+		if len(matches) < 2 {
+			continue
+		}
+		logentries = append(logentries, fmt.Sprintf("- #%d %s", pull.GetNumber(), matches[1]))
 	}
 
 	// Calculate next tag
@@ -83,7 +95,7 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 				continue
 			}
 			if con.Check(n) {
-				result := c.rcRegex.FindStringSubmatch(n.Prerelease())
+				result := candidateRx.FindStringSubmatch(n.Prerelease())
 				next, err := strconv.Atoi(result[1])
 				if err != nil {
 					return nil, err
@@ -105,6 +117,7 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 		Prerelease:      github.Bool(true),
 		Name:            github.String(semver.MustParse(nextTag).String()),
 		TargetCommitish: ev.After,
+		Body:            github.String(fmt.Sprintf("Changes:\n\n%s", strings.Join(logentries, "\n"))),
 	})
 
 	return nextTag, nil
