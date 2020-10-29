@@ -13,10 +13,10 @@ type WebhookHandler struct {
 	Client Client
 }
 
-func NewHandler(secret []byte) *WebhookHandler {
+func NewHandler(client Client, secret []byte) *WebhookHandler {
 	return &WebhookHandler{
+		Client: client,
 		Secret: secret,
-		Client: NewClient(),
 	}
 }
 

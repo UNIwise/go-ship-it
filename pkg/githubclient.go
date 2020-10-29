@@ -2,14 +2,15 @@ package pkg
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"os"
-	"sort"
+	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/google/go-github/v32/github"
-	"golang.org/x/oauth2"
 )
 
 type Client interface {
@@ -17,21 +18,16 @@ type Client interface {
 }
 
 type ClientImpl struct {
-	client *github.Client
+	client  *github.Client
+	rcRegex *regexp.Regexp
 }
 
-func NewClient() Client {
-	ctx := context.Background()
-	ts := oauth2.StaticTokenSource(
-		&oauth2.Token{
-			AccessToken: os.Getenv("GITHUB_TOKEN"),
-		},
-	)
-	tc := oauth2.NewClient(ctx, ts)
+func NewClient(tc *http.Client) Client {
 	cl := github.NewClient(tc)
 
 	return &ClientImpl{
-		client: cl,
+		client:  cl,
+		rcRegex: regexp.MustCompile("^rc.(?P<candidate>[0-9]+)$"),
 	}
 }
 
@@ -49,110 +45,100 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 	}
 	fmt.Printf("Master branch pushed. pre-release scheduled...\n")
 
-	tag, _, err := c.client.Repositories.GetLatestRelease(context.Background(), owner, repo)
-	if err != nil {
-		return nil, err
-	}
-	latest, err := semver.NewVersion(tag.GetTagName())
+	release, _, err := c.client.Repositories.GetLatestRelease(context.TODO(), owner, repo)
 	if err != nil {
 		return nil, err
 	}
 
-	comparison, _, err := c.client.Repositories.CompareCommits(context.Background(), owner, repo, tag.GetTargetCommitish(), ev.GetAfter())
+	// Collect changelog
+	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), owner, repo, release.GetTargetCommitish(), ev.GetAfter())
 	if err != nil {
 		return nil, err
 	}
-	level := func() int {
-		lvl := 1
-		for _, commit := range comparison.Commits {
-			prs, _, err := c.client.PullRequests.ListPullRequestsWithCommit(commit)
-			if err != nil {
-				return nil, err
-			}
-			for _, pr := range prs {
-				for _, label := range pr.Labels {
-					if label.GetName() == "major" {
-						return 3
-					} else if label.GetName() == "minor" {
-						lvl = 2
-					}
-				}
-			}
-		}
-		return lvl
-	}()
 
-	var next semver.Version
-	switch level {
-	case 2:
-		next = latest.IncMinor()
-	case 3:
-		next = latest.IncMajor()
-	default:
-		next = latest.IncPatch()
+	pulls, err := c.getPulls(owner, repo, comparison.Commits)
+
+	for _, pull := range pulls {
+		pull.GetBody()
 	}
 
-	con, err := semver.NewConstraint(fmt.Sprintf("> %s-rc.0 < %s", next.Original(), next.Original()))
-	next.String()
-	con.Check()
+	// Calculate next tag
+	v, err := semver.NewVersion(release.GetTagName())
+	if err != nil {
+		return nil, err
+	}
+	con, err := semver.NewConstraint(fmt.Sprintf(">%v-rc.0 <%v-rc0", v.IncPatch(), v.IncPatch()))
+	if err != nil {
+		return nil, err
+	}
 
+	rc := 1
 	page := 0
-	tags := []*github.RepositoryTag{}
 	for {
-		nexttags, out, err := c.client.Repositories.ListTags(context.Background(), owner, repo, &github.ListOptions{
+		tags, out, err := c.client.Repositories.ListTags(context.TODO(), owner, repo, &github.ListOptions{
 			Page: page,
 		})
 		if err != nil {
 			return nil, err
 		}
-		tags = append(tags, nexttags...)
+		for _, t := range tags {
+			n, err := semver.NewVersion(t.GetName())
+			if err != nil {
+				continue
+			}
+			if con.Check(n) {
+				fmt.Print(n.Prerelease())
+				result := c.rcRegex.FindStringSubmatch(n.Prerelease())
+				fmt.Print(result)
+				next, err := strconv.Atoi(result[1])
+				if err != nil {
+					return nil, err
+				}
+				if next >= rc {
+					rc = next + 1
+				}
+			}
+		}
 		if out.NextPage == 0 {
 			break
 		}
 		page = out.NextPage
 	}
+	nextTag := fmt.Sprintf("v%v-rc.%d", v.IncPatch(), rc)
 
-	versions := semver.Collection{}
-	for _, tag := range tags {
-		max := semver.NewVersion(latest.GetTagName())
-		fmt.Printf("tag found: %v", tag.GetName())
-		version
-		version, err := semver.NewVersion(tag.GetName())
-		if err != nil {
-			continue
-		}
-		versions = append(versions, version)
-	}
-	sort.Sort(versions)
-	// Find latest release
+	fmt.Printf("I'm going to create a release called %v", nextTag)
 
-	// Calculate new release version
-
-	// Create new release
-
-	// repo := ev.GetRepo()
-	// repo.GetMasterBranch()
-
-	// ref := ev.GetRef()
-
-	// b, _, err := c.client.Repositories.GetBranch(context.Background(), repo.GetOwner().GetName(), repo.GetName(), repo.GetMasterBranch())
-
-	// // Check if new release should be created
-	// // repo := ev.GetRepo()
-
-	// // ref := ev.GetRef()
-	// // c.client.Repositories.GetBranch(context.Background(), repo.GetOwner().GetName(), repo.GetName(), )
-	// // r, _, err := c.client.Repositories.Get(context.Background(), repo.GetOwner().GetName(), repo.GetName())
-	// // reference, _, err := c.client.Git.GetRef(context.Background(), repo.GetOwner().GetName(), repo.GetName(), ref)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// c.client.Repositories.CreateRelease(context.Background(), repo.GetOwner().GetName(), repo.GetName(), &github.RepositoryRelease{
-	// 	Prerelease: github.Bool(true),
-	// 	Name:       github.String("2.18.5"),
-	// 	TagName:    github.String("v2.18.5"),
-	// })
+	c.client.Repositories.CreateRelease(context.TODO(), owner, repo, &github.RepositoryRelease{
+		TagName:         github.String(nextTag),
+		Prerelease:      github.Bool(true),
+		Name:            github.String(semver.MustParse(nextTag).String()),
+		TargetCommitish: ev.After,
+	})
 
 	return nil, nil
+}
+
+func (c *ClientImpl) getPulls(owner, repo string, commits []*github.RepositoryCommit) (map[int]*github.PullRequest, error) {
+	pulls := make(map[int]*github.PullRequest)
+	for _, commit := range commits {
+		page := 0
+		for {
+			prs, out, err := c.client.PullRequests.ListPullRequestsWithCommit(context.TODO(), owner, repo, commit.GetSHA(), &github.PullRequestListOptions{ListOptions: github.ListOptions{Page: page}})
+			if err != nil {
+				return nil, err
+			}
+			for _, pr := range prs {
+				if pr.GetNumber() != 0 {
+					pulls[pr.GetNumber()] = pr
+				} else {
+					return nil, errors.New("Could not get pull request number")
+				}
+			}
+			if out.NextPage == 0 {
+				break
+			}
+			page = out.NextPage
+		}
+	}
+	return pulls, nil
 }
