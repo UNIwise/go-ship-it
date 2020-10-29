@@ -44,7 +44,7 @@ spec:
             - name: GITHUB_SECRET
               valueFrom:
                 secretKeyRef:
-                  secret: {{ include "go-ship-it.fullname" . }}
+                  name: {{ include "go-ship-it.fullname" . }}
                   key: webhook-secret
             - name: GITHUB_CERT_PATH
               value: /keys/key.pem
