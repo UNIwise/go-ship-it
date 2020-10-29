@@ -4,19 +4,20 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/bradleyfalzon/ghinstallation"
 	"github.com/google/go-github/v32/github"
 	"github.com/labstack/echo/v4"
 )
 
 type WebhookHandler struct {
-	Secret []byte
-	Client Client
+	Secret        []byte
+	AppsTransport *ghinstallation.AppsTransport
 }
 
-func NewHandler(client Client, secret []byte) *WebhookHandler {
+func NewHandler(atr *ghinstallation.AppsTransport, secret []byte) *WebhookHandler {
 	return &WebhookHandler{
-		Client: client,
-		Secret: secret,
+		AppsTransport: atr,
+		Secret:        secret,
 	}
 }
 
@@ -32,7 +33,9 @@ func (h *WebhookHandler) HandleGithub(c echo.Context) error {
 
 	switch event := event.(type) {
 	case *github.PushEvent:
-		_, err := h.Client.HandlePushEvent(event)
+		k := ghinstallation.NewFromAppsTransport(h.AppsTransport, event.Installation.GetID())
+		client := NewClient(&http.Client{Transport: k})
+		_, err := client.HandlePushEvent(event)
 		if err != nil {
 			return err
 		}
