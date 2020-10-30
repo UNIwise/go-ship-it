@@ -1,7 +1,6 @@
 package pkg
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/bradleyfalzon/ghinstallation"
@@ -42,6 +41,7 @@ func (h *WebhookHandler) HandleGithub(c echo.Context) error {
 		return c.NoContent(http.StatusAccepted)
 	case *github.PingEvent:
 		return c.String(http.StatusOK, "Got ping event")
+	default:
+		return c.String(http.StatusNotAcceptable, "Unexpected event")
 	}
-	return errors.New("Not understood")
 }
