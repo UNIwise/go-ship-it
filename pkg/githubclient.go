@@ -34,7 +34,7 @@ func NewClient(tc *http.Client) Client {
 }
 
 func init() {
-	changelogRx = regexp.MustCompile("```release-note\\r\\n([\\s\\S]*?)\\r\\n```")
+	changelogRx = regexp.MustCompile("```release-note\\n([\\s\\S]*?)\\n```")
 	candidateRx = regexp.MustCompile("^rc.(?P<candidate>[0-9]+)$")
 }
 
