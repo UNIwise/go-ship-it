@@ -10,7 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/sirupsen/logrus"
-	"github.com/uniwise/git-releaser/pkg"
+	"github.com/uniwise/go-ship-it/pkg"
 )
 
 func main() {

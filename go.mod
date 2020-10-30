@@ -1,4 +1,4 @@
-module github.com/uniwise/git-releaser
+module github.com/uniwise/go-ship-it
 
 go 1.15
 
