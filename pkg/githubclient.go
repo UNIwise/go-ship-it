@@ -19,6 +19,7 @@ var (
 
 type Client interface {
 	HandlePushEvent(*github.PushEvent) (interface{}, error)
+	HandleReleaseEvent(*github.ReleaseEvent) (interface{}, error)
 }
 
 type ClientImpl struct {
@@ -121,6 +122,68 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 	})
 
 	return nextTag, nil
+}
+
+func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, error) {
+	owner := ev.GetRepo().GetOwner().GetName()
+	repo := ev.GetRepo().GetName()
+
+	release := ev.GetRelease()
+	if release.GetPrerelease() {
+		return nil, nil
+	}
+
+	version, err := semver.NewVersion(release.GetTagName())
+	if err != nil {
+		return nil, err
+	}
+
+	if version.Prerelease() == "" {
+		return nil, nil
+	}
+
+	newVersion, err := version.SetPrerelease("")
+	_, _, err = c.client.Repositories.CreateRelease(context.TODO(), owner, repo, &github.RepositoryRelease{
+		TagName:         github.String(fmt.Sprintf("v%v", newVersion)),
+		Prerelease:      github.Bool(false),
+		Name:            github.String(newVersion.String()),
+		Body:            release.Body,
+		TargetCommitish: release.TargetCommitish,
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	con, err := semver.NewConstraint(fmt.Sprintf(">=%v-rc.0 <%v-rc0", newVersion, newVersion))
+	if err != nil {
+		return nil, err
+	}
+
+	page := 0
+	for {
+		releases, out, err := c.client.Repositories.ListReleases(context.TODO(), owner, repo, &github.ListOptions{
+			Page: page,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range releases {
+			n, err := semver.NewVersion(r.GetTagName())
+			if err != nil {
+				continue
+			}
+			if con.Check(n) {
+				c.client.Repositories.DeleteRelease(context.TODO(), owner, repo, r.GetID())
+				c.client.Git.DeleteRef(context.TODO(), owner, repo, fmt.Sprintf("tags/%v", r.GetTagName()))
+			}
+		}
+		if out.NextPage == 0 {
+			break
+		}
+		page = out.NextPage
+	}
+	return nil, nil
 }
 
 func (c *ClientImpl) getPulls(owner, repo string, commits []*github.RepositoryCommit) (map[int]*github.PullRequest, error) {

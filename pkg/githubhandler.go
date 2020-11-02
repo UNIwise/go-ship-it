@@ -38,7 +38,15 @@ func (h *WebhookHandler) HandleGithub(c echo.Context) error {
 		if err != nil {
 			return err
 		}
-		return c.NoContent(http.StatusAccepted)
+		return c.String(http.StatusAccepted, "Handling push event")
+	case *github.ReleaseEvent:
+		k := ghinstallation.NewFromAppsTransport(h.AppsTransport, event.Installation.GetID())
+		client := NewClient(&http.Client{Transport: k})
+		_, err := client.HandleReleaseEvent(event)
+		if err != nil {
+			return err
+		}
+		return c.String(http.StatusAccepted, "Handling release event")
 	case *github.PingEvent:
 		return c.String(http.StatusOK, "Got ping event")
 	default:
