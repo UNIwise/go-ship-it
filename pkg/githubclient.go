@@ -35,12 +35,12 @@ func NewClient(tc *http.Client) Client {
 }
 
 func init() {
-	changelogRx = regexp.MustCompile("```release-note\\n([\\s\\S]*?)\\n```")
+	changelogRx = regexp.MustCompile("```release-note\\r\\n([\\s\\S]*?)\\r\\n```")
 	candidateRx = regexp.MustCompile("^rc.(?P<candidate>[0-9]+)$")
 }
 
 func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) {
-	owner := ev.GetRepo().GetOwner().GetName()
+	owner := ev.GetRepo().GetOwner().GetLogin()
 	repo := ev.GetRepo().GetName()
 	pushed := strings.TrimPrefix(ev.GetRef(), "refs/heads/")
 	master := ev.GetRepo().GetMasterBranch()
@@ -48,6 +48,7 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 	if pushed != master {
 		return nil, nil
 	}
+	fmt.Println("master pushed. Release scheduled")
 
 	release, _, err := c.client.Repositories.GetLatestRelease(context.TODO(), owner, repo)
 	if err != nil {
@@ -55,7 +56,7 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 	}
 
 	// Collect changelog
-	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), owner, repo, release.GetTargetCommitish(), ev.GetAfter())
+	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), owner, repo, release.GetTagName(), ev.GetAfter())
 	if err != nil {
 		return nil, err
 	}
@@ -125,63 +126,83 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 }
 
 func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, error) {
-	owner := ev.GetRepo().GetOwner().GetName()
-	repo := ev.GetRepo().GetName()
-
 	release := ev.GetRelease()
 	if release.GetPrerelease() {
 		return nil, nil
 	}
+	version, err := semver.NewVersion(release.GetTagName())
+	if err != nil {
+		return nil, nil
+	}
+	if version.Prerelease() != "" {
+		return c.Promote(ev)
+	}
+	return c.Cleanup(ev)
+}
+
+func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
+	owner := ev.GetRepo().GetOwner().GetLogin()
+	repo := ev.GetRepo().GetName()
+
+	// fmt.Printf("Got release webhook to %s/%s\n", owner, repo)
+
+	release := ev.GetRelease()
 
 	version, err := semver.NewVersion(release.GetTagName())
 	if err != nil {
 		return nil, err
 	}
 
-	if version.Prerelease() == "" {
-		return nil, nil
-	}
-
 	newVersion, err := version.SetPrerelease("")
-	_, _, err = c.client.Repositories.CreateRelease(context.TODO(), owner, repo, &github.RepositoryRelease{
+	fmt.Printf("Patching %v with TagName:%v Name:%v Commit:%v\n", release.GetID(), fmt.Sprintf("v%v", newVersion), newVersion.String(), release.GetTargetCommitish())
+	_, _, err = c.client.Repositories.EditRelease(context.TODO(), owner, repo, release.GetID(), &github.RepositoryRelease{
 		TagName:         github.String(fmt.Sprintf("v%v", newVersion)),
-		Prerelease:      github.Bool(false),
 		Name:            github.String(newVersion.String()),
-		Body:            release.Body,
 		TargetCommitish: release.TargetCommitish,
 	})
+	if err != nil {
+		return nil, err
+	}
+	_, err = c.client.Git.DeleteRef(context.TODO(), owner, repo, fmt.Sprintf("tags/%v", release.GetTagName()))
+	if err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
 
+func (c *ClientImpl) Cleanup(ev *github.ReleaseEvent) (interface{}, error) {
+	owner := ev.GetRepo().GetOwner().GetLogin()
+	repo := ev.GetRepo().GetName()
+
+	release := ev.GetRelease()
+
+	version, err := semver.NewVersion(release.GetTagName())
 	if err != nil {
 		return nil, err
 	}
 
-	con, err := semver.NewConstraint(fmt.Sprintf(">=%v-rc.0 <%v-rc0", newVersion, newVersion))
+	con, err := semver.NewConstraint(fmt.Sprintf(">=%v-rc.0 <%v-rc0", version, version))
 	if err != nil {
 		return nil, err
 	}
 
-	page := 0
-	for {
-		releases, out, err := c.client.Repositories.ListReleases(context.TODO(), owner, repo, &github.ListOptions{
-			Page: page,
-		})
+	releases, err := c.getReleases(owner, repo, func(r *github.RepositoryRelease) bool {
+		n, err := semver.NewVersion(r.GetTagName())
 		if err != nil {
-			return nil, err
+			return false
 		}
-		for _, r := range releases {
-			n, err := semver.NewVersion(r.GetTagName())
-			if err != nil {
-				continue
-			}
-			if con.Check(n) {
-				c.client.Repositories.DeleteRelease(context.TODO(), owner, repo, r.GetID())
-				c.client.Git.DeleteRef(context.TODO(), owner, repo, fmt.Sprintf("tags/%v", r.GetTagName()))
-			}
+		return con.Check(n)
+	})
+
+	for _, r := range releases {
+		_, err = c.client.Repositories.DeleteRelease(context.TODO(), owner, repo, r.GetID())
+		if err != nil {
+			fmt.Println(err)
 		}
-		if out.NextPage == 0 {
-			break
+		_, err = c.client.Git.DeleteRef(context.TODO(), owner, repo, fmt.Sprintf("tags/%v", r.GetTagName()))
+		if err != nil {
+			fmt.Println(err)
 		}
-		page = out.NextPage
 	}
 	return nil, nil
 }
@@ -209,4 +230,27 @@ func (c *ClientImpl) getPulls(owner, repo string, commits []*github.RepositoryCo
 		}
 	}
 	return pulls, nil
+}
+
+func (c *ClientImpl) getReleases(owner, repo string, include func(*github.RepositoryRelease) bool) ([]*github.RepositoryRelease, error) {
+	page := 0
+	releases := []*github.RepositoryRelease{}
+	for {
+		rs, out, err := c.client.Repositories.ListReleases(context.TODO(), owner, repo, &github.ListOptions{
+			Page: page,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rs {
+			if include(r) {
+				releases = append(releases, r)
+			}
+		}
+		if out.NextPage == 0 {
+			break
+		}
+		page = out.NextPage
+	}
+	return releases, nil
 }
