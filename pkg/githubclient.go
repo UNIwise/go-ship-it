@@ -137,7 +137,8 @@ func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, e
 	if version.Prerelease() != "" {
 		return c.Promote(ev)
 	}
-	return c.Cleanup(ev)
+	// return c.Cleanup(ev)
+	return nil, nil
 }
 
 func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
