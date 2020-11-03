@@ -77,52 +77,33 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 	if err != nil {
 		return nil, err
 	}
-	con, err := semver.NewConstraint(fmt.Sprintf(">%v-rc.0 <%v-rc0", v.IncPatch(), v.IncPatch()))
+
+	refs, err := c.getRefs(owner, repo, fmt.Sprintf("tags/v%v-rc.", v.IncPatch()))
 	if err != nil {
 		return nil, err
 	}
-
 	rc := 1
-	page := 0
-	for {
-		tags, out, err := c.client.Repositories.ListTags(context.TODO(), owner, repo, &github.ListOptions{
-			Page: page,
-		})
+	for _, r := range refs {
+		result := candidateRx.FindStringSubmatch(strings.TrimPrefix(r.GetRef(), fmt.Sprintf("refs/tags/v%v-", v.IncPatch())))
+		next, err := strconv.Atoi(result[1])
 		if err != nil {
 			return nil, err
 		}
-		for _, t := range tags {
-			n, err := semver.NewVersion(t.GetName())
-			if err != nil {
-				continue
-			}
-			if con.Check(n) {
-				result := candidateRx.FindStringSubmatch(n.Prerelease())
-				next, err := strconv.Atoi(result[1])
-				if err != nil {
-					return nil, err
-				}
-				if next >= rc {
-					rc = next + 1
-				}
-			}
+		if next >= rc {
+			rc = next + 1
 		}
-		if out.NextPage == 0 {
-			break
-		}
-		page = out.NextPage
 	}
+
 	nextTag := fmt.Sprintf("v%v-rc.%d", v.IncPatch(), rc)
 
-	c.client.Repositories.CreateRelease(context.TODO(), owner, repo, &github.RepositoryRelease{
+	_, _, err = c.client.Repositories.CreateRelease(context.TODO(), owner, repo, &github.RepositoryRelease{
 		TagName:         github.String(nextTag),
 		Prerelease:      github.Bool(true),
 		Name:            github.String(semver.MustParse(nextTag).String()),
 		TargetCommitish: ev.After,
 		Body:            github.String(fmt.Sprintf("Changes:\n\n%s", strings.Join(logentries, "\n"))),
 	})
-
-	return nextTag, nil
+	return nextTag, err
 }
 
 func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, error) {
@@ -137,15 +118,12 @@ func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, e
 	if version.Prerelease() != "" {
 		return c.Promote(ev)
 	}
-	// return c.Cleanup(ev)
-	return nil, nil
+	return c.Cleanup(ev)
 }
 
 func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
 	owner := ev.GetRepo().GetOwner().GetLogin()
 	repo := ev.GetRepo().GetName()
-
-	// fmt.Printf("Got release webhook to %s/%s\n", owner, repo)
 
 	release := ev.GetRelease()
 
@@ -164,10 +142,6 @@ func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, err = c.client.Git.DeleteRef(context.TODO(), owner, repo, fmt.Sprintf("tags/%v", release.GetTagName()))
-	if err != nil {
-		return nil, err
-	}
 	return nil, nil
 }
 
@@ -177,34 +151,30 @@ func (c *ClientImpl) Cleanup(ev *github.ReleaseEvent) (interface{}, error) {
 
 	release := ev.GetRelease()
 
-	version, err := semver.NewVersion(release.GetTagName())
+	refs, err := c.getRefs(owner, repo, fmt.Sprintf("tags/%v-rc.", release.GetTagName()))
 	if err != nil {
 		return nil, err
 	}
 
-	con, err := semver.NewConstraint(fmt.Sprintf(">=%v-rc.0 <%v-rc0", version, version))
-	if err != nil {
-		return nil, err
-	}
-
-	releases, err := c.getReleases(owner, repo, func(r *github.RepositoryRelease) bool {
-		n, err := semver.NewVersion(r.GetTagName())
-		if err != nil {
-			return false
+	for _, r := range refs {
+		tag := strings.TrimPrefix(r.GetRef(), "refs/tags/")
+		toDelete, _, _ := c.client.Repositories.GetReleaseByTag(context.TODO(), owner, repo, tag)
+		if toDelete != nil {
+			if toDelete.GetID() == release.GetID() || !toDelete.GetPrerelease() {
+				// Ensure full releases and current release is not inadvertently deleted
+				continue
+			}
+			_, err = c.client.Repositories.DeleteRelease(context.TODO(), owner, repo, toDelete.GetID())
+			if err != nil {
+				fmt.Println(err)
+			}
 		}
-		return con.Check(n)
-	})
-
-	for _, r := range releases {
-		_, err = c.client.Repositories.DeleteRelease(context.TODO(), owner, repo, r.GetID())
-		if err != nil {
-			fmt.Println(err)
-		}
-		_, err = c.client.Git.DeleteRef(context.TODO(), owner, repo, fmt.Sprintf("tags/%v", r.GetTagName()))
+		_, err = c.client.Git.DeleteRef(context.TODO(), owner, repo, r.GetRef())
 		if err != nil {
 			fmt.Println(err)
 		}
 	}
+
 	return nil, nil
 }
 
@@ -233,25 +203,24 @@ func (c *ClientImpl) getPulls(owner, repo string, commits []*github.RepositoryCo
 	return pulls, nil
 }
 
-func (c *ClientImpl) getReleases(owner, repo string, include func(*github.RepositoryRelease) bool) ([]*github.RepositoryRelease, error) {
+func (c *ClientImpl) getRefs(owner, repo, prefix string) ([]*github.Reference, error) {
 	page := 0
-	releases := []*github.RepositoryRelease{}
+	references := []*github.Reference{}
 	for {
-		rs, out, err := c.client.Repositories.ListReleases(context.TODO(), owner, repo, &github.ListOptions{
-			Page: page,
+		refs, out, err := c.client.Git.ListMatchingRefs(context.TODO(), owner, repo, &github.ReferenceListOptions{
+			Ref: prefix,
+			ListOptions: github.ListOptions{
+				Page: page,
+			},
 		})
 		if err != nil {
 			return nil, err
 		}
-		for _, r := range rs {
-			if include(r) {
-				releases = append(releases, r)
-			}
-		}
+		references = append(references, refs...)
 		if out.NextPage == 0 {
 			break
 		}
 		page = out.NextPage
 	}
-	return releases, nil
+	return references, nil
 }
