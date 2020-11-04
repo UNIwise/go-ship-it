@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	candidateRx, changelogRx *regexp.Regexp
+	candidateRx, changelogRx, emptyRx *regexp.Regexp
 )
 
 type Client interface {
@@ -35,6 +35,7 @@ func NewClient(tc *http.Client) Client {
 }
 
 func init() {
+	emptyRx = regexp.MustCompile("^\\s*((?i)none|\\s*)\\s*$")
 	changelogRx = regexp.MustCompile("```release-note\\r\\n([\\s\\S]*?)\\r\\n```")
 	candidateRx = regexp.MustCompile("^rc.(?P<candidate>[0-9]+)$")
 }
@@ -63,10 +64,17 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 
 	pulls, err := c.getPulls(owner, repo, comparison.Commits)
 
+	if err != nil {
+		fmt.Printf("Error while examining pull requests, %v\n", err)
+	}
+
 	logentries := []string{}
 	for _, pull := range pulls {
 		matches := changelogRx.FindStringSubmatch(pull.GetBody())
 		if len(matches) < 2 {
+			continue
+		}
+		if emptyRx.Match([]byte(matches[1])) {
 			continue
 		}
 		logentries = append(logentries, fmt.Sprintf("- #%d %s", pull.GetNumber(), matches[1]))
