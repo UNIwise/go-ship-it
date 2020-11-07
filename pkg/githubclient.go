@@ -139,12 +139,16 @@ func (c *ClientImpl) Cleanup(ev *github.ReleaseEvent) (interface{}, error) {
 }
 
 func (c *ClientImpl) ReleaseCandidate(owner, repo, latest, target string) (interface{}, error) {
-	changelog, err := c.CollectChangelog(owner, repo, latest, target)
+	pulls, err := c.getPulls(owner, repo, latest, target)
+	if err != nil {
+		fmt.Printf("Error while examining pull requests, %v\n", err)
+	}
+	changelog, err := c.CollectChangelog(pulls)
 	if err != nil {
 		fmt.Println("Error while gathering changelog", err)
 	}
 
-	nextTag, err := c.NextTag(owner, repo, latest)
+	nextTag, err := c.NextTag(owner, repo, latest, pulls)
 	if err != nil {
 		return nil, errors.Wrap(err, "Could not calculate next tag")
 	}
@@ -159,17 +163,7 @@ func (c *ClientImpl) ReleaseCandidate(owner, repo, latest, target string) (inter
 	return nextTag, err
 }
 
-func (c *ClientImpl) CollectChangelog(owner, repo, latest, current string) (string, error) {
-	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), owner, repo, latest, current)
-	if err != nil {
-		return "", err
-	}
-
-	pulls, err := c.getPulls(owner, repo, comparison.Commits)
-	if err != nil {
-		fmt.Printf("Error while examining pull requests, %v\n", err)
-	}
-
+func (c *ClientImpl) CollectChangelog(pulls map[int]*github.PullRequest) (string, error) {
 	logentries := []string{}
 	for _, pull := range pulls {
 		matches := changelogRx.FindStringSubmatch(pull.GetBody())
@@ -184,19 +178,33 @@ func (c *ClientImpl) CollectChangelog(owner, repo, latest, current string) (stri
 	return fmt.Sprintf("Changes:\n\n%s", strings.Join(logentries, "\n")), nil
 }
 
-func (c *ClientImpl) NextTag(owner, repo, latest string) (string, error) {
+func (c *ClientImpl) NextTag(owner, repo, latest string, pulls map[int]*github.PullRequest) (string, error) {
 	v, err := semver.NewVersion(latest)
 	if err != nil {
 		return "", err
 	}
 
-	refs, err := c.getRefs(owner, repo, fmt.Sprintf("tags/v%v-rc.", v.IncPatch()))
+	nextVersion := v.IncPatch()
+out:
+	for _, pr := range pulls {
+		for _, label := range pr.Labels {
+			if label.GetName() == "minor" {
+				nextVersion = v.IncMinor()
+			}
+			if label.GetName() == "major" {
+				nextVersion = v.IncMajor()
+				break out
+			}
+		}
+	}
+
+	refs, err := c.getRefs(owner, repo, fmt.Sprintf("tags/v%v-rc.", nextVersion))
 	if err != nil {
 		return "", err
 	}
 	rc := 1
 	for _, r := range refs {
-		result := candidateRx.FindStringSubmatch(strings.TrimPrefix(r.GetRef(), fmt.Sprintf("refs/tags/v%v-", v.IncPatch())))
+		result := candidateRx.FindStringSubmatch(strings.TrimPrefix(r.GetRef(), fmt.Sprintf("refs/tags/v%v-", nextVersion)))
 		next, err := strconv.Atoi(result[1])
 		if err != nil {
 			return "", err
@@ -206,12 +214,16 @@ func (c *ClientImpl) NextTag(owner, repo, latest string) (string, error) {
 		}
 	}
 
-	return fmt.Sprintf("v%v-rc.%d", v.IncPatch(), rc), nil
+	return fmt.Sprintf("v%v-rc.%d", nextVersion, rc), nil
 }
 
-func (c *ClientImpl) getPulls(owner, repo string, commits []*github.RepositoryCommit) (map[int]*github.PullRequest, error) {
+func (c *ClientImpl) getPulls(owner, repo, latest, current string) (map[int]*github.PullRequest, error) {
+	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), owner, repo, latest, current)
+	if err != nil {
+		return nil, err
+	}
 	pulls := make(map[int]*github.PullRequest)
-	for _, commit := range commits {
+	for _, commit := range comparison.Commits {
 		page := 0
 		for {
 			prs, out, err := c.client.PullRequests.ListPullRequestsWithCommit(context.TODO(), owner, repo, commit.GetSHA(), &github.PullRequestListOptions{ListOptions: github.ListOptions{Page: page}})
