@@ -2,12 +2,13 @@ package pkg
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/pkg/errors"
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/google/go-github/v32/github"
@@ -49,69 +50,14 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 	if pushed != master {
 		return nil, nil
 	}
-	fmt.Println("master pushed. Release scheduled")
+	fmt.Printf("%v pushed. Release scheduled\n", master)
 
 	release, _, err := c.client.Repositories.GetLatestRelease(context.TODO(), owner, repo)
 	if err != nil {
 		return nil, err
 	}
 
-	// Collect changelog
-	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), owner, repo, release.GetTagName(), ev.GetAfter())
-	if err != nil {
-		return nil, err
-	}
-
-	pulls, err := c.getPulls(owner, repo, comparison.Commits)
-
-	if err != nil {
-		fmt.Printf("Error while examining pull requests, %v\n", err)
-	}
-
-	logentries := []string{}
-	for _, pull := range pulls {
-		matches := changelogRx.FindStringSubmatch(pull.GetBody())
-		if len(matches) < 2 {
-			continue
-		}
-		if emptyRx.Match([]byte(matches[1])) {
-			continue
-		}
-		logentries = append(logentries, fmt.Sprintf("- #%d %s", pull.GetNumber(), matches[1]))
-	}
-
-	// Calculate next tag
-	v, err := semver.NewVersion(release.GetTagName())
-	if err != nil {
-		return nil, err
-	}
-
-	refs, err := c.getRefs(owner, repo, fmt.Sprintf("tags/v%v-rc.", v.IncPatch()))
-	if err != nil {
-		return nil, err
-	}
-	rc := 1
-	for _, r := range refs {
-		result := candidateRx.FindStringSubmatch(strings.TrimPrefix(r.GetRef(), fmt.Sprintf("refs/tags/v%v-", v.IncPatch())))
-		next, err := strconv.Atoi(result[1])
-		if err != nil {
-			return nil, err
-		}
-		if next >= rc {
-			rc = next + 1
-		}
-	}
-
-	nextTag := fmt.Sprintf("v%v-rc.%d", v.IncPatch(), rc)
-
-	_, _, err = c.client.Repositories.CreateRelease(context.TODO(), owner, repo, &github.RepositoryRelease{
-		TagName:         github.String(nextTag),
-		Prerelease:      github.Bool(true),
-		Name:            github.String(semver.MustParse(nextTag).String()),
-		TargetCommitish: ev.After,
-		Body:            github.String(fmt.Sprintf("Changes:\n\n%s", strings.Join(logentries, "\n"))),
-	})
-	return nextTag, err
+	return c.ReleaseCandidate(owner, repo, release.GetTagName(), ev.GetAfter())
 }
 
 func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, error) {
@@ -126,7 +72,13 @@ func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, e
 	if version.Prerelease() != "" {
 		return c.Promote(ev)
 	}
-	return c.Cleanup(ev)
+
+	_, err = c.Cleanup(ev)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.ReleaseCandidate(ev.GetRepo().GetOwner().GetLogin(), ev.GetRepo().GetName(), ev.GetRelease().GetTagName(), ev.GetRepo().GetMasterBranch())
 }
 
 func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
@@ -184,6 +136,77 @@ func (c *ClientImpl) Cleanup(ev *github.ReleaseEvent) (interface{}, error) {
 	}
 
 	return nil, nil
+}
+
+func (c *ClientImpl) ReleaseCandidate(owner, repo, latest, target string) (interface{}, error) {
+	changelog, err := c.CollectChangelog(owner, repo, latest, target)
+	if err != nil {
+		fmt.Println("Error while gathering changelog", err)
+	}
+
+	nextTag, err := c.NextTag(owner, repo, latest)
+	if err != nil {
+		return nil, errors.Wrap(err, "Could not calculate next tag")
+	}
+
+	_, _, err = c.client.Repositories.CreateRelease(context.TODO(), owner, repo, &github.RepositoryRelease{
+		TagName:         github.String(nextTag),
+		Prerelease:      github.Bool(true),
+		Name:            github.String(semver.MustParse(nextTag).String()),
+		TargetCommitish: github.String(target),
+		Body:            github.String(changelog),
+	})
+	return nextTag, err
+}
+
+func (c *ClientImpl) CollectChangelog(owner, repo, latest, current string) (string, error) {
+	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), owner, repo, latest, current)
+	if err != nil {
+		return "", err
+	}
+
+	pulls, err := c.getPulls(owner, repo, comparison.Commits)
+	if err != nil {
+		fmt.Printf("Error while examining pull requests, %v\n", err)
+	}
+
+	logentries := []string{}
+	for _, pull := range pulls {
+		matches := changelogRx.FindStringSubmatch(pull.GetBody())
+		if len(matches) < 2 {
+			continue
+		}
+		if emptyRx.Match([]byte(matches[1])) {
+			continue
+		}
+		logentries = append(logentries, fmt.Sprintf("- #%d %s", pull.GetNumber(), matches[1]))
+	}
+	return fmt.Sprintf("Changes:\n\n%s", strings.Join(logentries, "\n")), nil
+}
+
+func (c *ClientImpl) NextTag(owner, repo, latest string) (string, error) {
+	v, err := semver.NewVersion(latest)
+	if err != nil {
+		return "", err
+	}
+
+	refs, err := c.getRefs(owner, repo, fmt.Sprintf("tags/v%v-rc.", v.IncPatch()))
+	if err != nil {
+		return "", err
+	}
+	rc := 1
+	for _, r := range refs {
+		result := candidateRx.FindStringSubmatch(strings.TrimPrefix(r.GetRef(), fmt.Sprintf("refs/tags/v%v-", v.IncPatch())))
+		next, err := strconv.Atoi(result[1])
+		if err != nil {
+			return "", err
+		}
+		if next >= rc {
+			rc = next + 1
+		}
+	}
+
+	return fmt.Sprintf("v%v-rc.%d", v.IncPatch(), rc), nil
 }
 
 func (c *ClientImpl) getPulls(owner, repo string, commits []*github.RepositoryCommit) (map[int]*github.PullRequest, error) {
