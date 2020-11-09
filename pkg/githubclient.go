@@ -78,7 +78,7 @@ func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, e
 		return nil, err
 	}
 
-	return c.ReleaseCandidate(ev.GetRepo().GetOwner().GetLogin(), ev.GetRepo().GetName(), ev.GetRelease().GetTagName(), ev.GetRepo().GetMasterBranch())
+	return c.ReleaseCandidate(ev.GetRepo().GetOwner().GetLogin(), ev.GetRepo().GetName(), ev.GetRelease().GetTagName(), ev.GetRepo().GetDefaultBranch())
 }
 
 func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
