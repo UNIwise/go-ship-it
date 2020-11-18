@@ -92,7 +92,7 @@ func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
 		return nil, err
 	}
 
-	newVersion, err := version.SetPrerelease("")
+	newVersion, _ := version.SetPrerelease("")
 	fmt.Printf("Patching %v with TagName:%v Name:%v Commit:%v\n", release.GetID(), fmt.Sprintf("v%v", newVersion), newVersion.String(), release.GetTargetCommitish())
 	_, _, err = c.client.Repositories.EditRelease(context.TODO(), owner, repo, release.GetID(), &github.RepositoryRelease{
 		TagName:         github.String(fmt.Sprintf("v%v", newVersion)),
@@ -102,7 +102,64 @@ func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	_, err = c.LabelPRs(owner, repo, &newVersion)
+	if err != nil {
+		fmt.Println(err)
+	}
 	return nil, nil
+}
+
+func (c *ClientImpl) LabelPRs(owner, repo string, next *semver.Version) (interface{}, error) {
+	last, err := c.FindLast(owner, repo, next)
+	if err != nil {
+		return nil, err
+	}
+
+	pulls, err := c.getPulls(owner, repo, fmt.Sprintf("v%v", last.String()), fmt.Sprintf("v%v", next.String()))
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("Found %d pull requests\n", len(pulls))
+	_, _, err = c.client.Issues.CreateLabel(context.TODO(), owner, repo, &github.Label{
+		Name: github.String(next.String()),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	for n, pull := range pulls {
+		fmt.Printf("Labeling %d\n", pull.GetNumber())
+		_, _, err := c.client.Issues.AddLabelsToIssue(context.TODO(), owner, repo, n, []string{next.String()})
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+	return nil, nil
+}
+
+func (c *ClientImpl) FindLast(owner, repo string, next *semver.Version) (*semver.Version, error) {
+	constraint, err := semver.NewConstraint(fmt.Sprintf("<%v", next.String()))
+	if err != nil {
+		return nil, err
+	}
+
+	refs, err := c.getRefs(owner, repo, "tags/v")
+	if err != nil {
+		return nil, err
+	}
+
+	top := semver.MustParse("v0.0.0")
+	for _, ref := range refs {
+		v, err := semver.NewVersion(strings.TrimPrefix(ref.GetRef(), "refs/tags/"))
+		if err != nil {
+			continue
+		}
+		if constraint.Check(v) && v.GreaterThan(top) {
+			top = v
+		}
+	}
+	return top, nil
 }
 
 func (c *ClientImpl) Cleanup(ev *github.ReleaseEvent) (interface{}, error) {
