@@ -61,6 +61,8 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 }
 
 func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, error) {
+	owner := ev.GetRepo().GetOwner().GetLogin()
+	repo := ev.GetRepo().GetName()
 	release := ev.GetRelease()
 	if release.GetPrerelease() {
 		return nil, nil
@@ -78,7 +80,13 @@ func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, e
 		return nil, err
 	}
 
-	return c.ReleaseCandidate(ev.GetRepo().GetOwner().GetLogin(), ev.GetRepo().GetName(), ev.GetRelease().GetTagName(), ev.GetRepo().GetDefaultBranch())
+	curr := release.GetTagName()
+	next := ev.GetRepo().GetDefaultBranch()
+	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), owner, repo, curr, next)
+	if comparison.GetTotalCommits() != 0 {
+		return c.ReleaseCandidate(ev.GetRepo().GetOwner().GetLogin(), ev.GetRepo().GetName(), ev.GetRelease().GetTagName(), ev.GetRepo().GetDefaultBranch())
+	}
+	return nil, nil
 }
 
 func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
