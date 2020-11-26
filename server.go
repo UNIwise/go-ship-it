@@ -8,7 +8,6 @@ import (
 	"github.com/bradleyfalzon/ghinstallation"
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
 	"github.com/sirupsen/logrus"
 	"github.com/uniwise/go-ship-it/pkg"
 )
@@ -28,9 +27,6 @@ func main() {
 	handler := pkg.NewHandler(atr, []byte(os.Getenv("GITHUB_SECRET")))
 
 	e := echo.New()
-	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-		Skipper: func(c echo.Context) bool { return c.Path() == "/" },
-	}))
 	e.POST("/github", handler.HandleGithub)
 	e.GET("/", func(c echo.Context) error {
 		return c.String(http.StatusOK, "Ready to receive")
