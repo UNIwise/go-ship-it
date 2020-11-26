@@ -57,7 +57,7 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 		return nil, err
 	}
 
-	return c.ReleaseCandidate(owner, repo, release.GetTagName(), ev.GetAfter())
+	return c.ReleaseCandidate(owner, repo, release.GetTagName(), master)
 }
 
 func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, error) {
@@ -100,16 +100,29 @@ func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
 		return nil, err
 	}
 
+	ref, _, err := c.client.Git.GetRef(context.TODO(), owner, repo, fmt.Sprintf("tags/%s", release.GetTagName()))
+	if err != nil {
+		return nil, err
+	}
 	newVersion, _ := version.SetPrerelease("")
-	fmt.Printf("Patching %v with TagName:%v Name:%v Commit:%v\n", release.GetID(), fmt.Sprintf("v%v", newVersion), newVersion.String(), release.GetTargetCommitish())
-	_, _, err = c.client.Repositories.EditRelease(context.TODO(), owner, repo, release.GetID(), &github.RepositoryRelease{
-		TagName:         github.String(fmt.Sprintf("v%v", newVersion)),
-		Name:            github.String(newVersion.String()),
-		TargetCommitish: release.TargetCommitish,
+	fmt.Printf("Creating tag %v with object %v\n", newVersion, ref.GetObject())
+	_, _, err = c.client.Git.CreateRef(context.TODO(), owner, repo, &github.Reference{
+		Ref:    github.String(fmt.Sprintf("refs/tags/v%v", newVersion)),
+		Object: ref.Object,
 	})
 	if err != nil {
 		return nil, err
 	}
+	fmt.Printf("Patching %v with TagName:%v Name:%v Commit:%v\n", release.GetID(), fmt.Sprintf("v%v", newVersion), newVersion.String(), release.GetTargetCommitish())
+	_, _, err = c.client.Repositories.EditRelease(context.TODO(), owner, repo, release.GetID(), &github.RepositoryRelease{
+		Name:    github.String(newVersion.String()),
+		TagName: github.String(fmt.Sprintf("v%v", newVersion)),
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
 	_, err = c.LabelPRs(owner, repo, &newVersion)
 	if err != nil {
 		fmt.Println(err)
