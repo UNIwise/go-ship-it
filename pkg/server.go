@@ -47,7 +47,7 @@ func (s *ServerImpl) Serve() error {
 			if id == "" {
 				id = c.Response().Header().Get(echo.HeaderXRequestID)
 			}
-			c.Logger().SetHeader(fmt.Sprintf("${level} %s [${short_file}:${line}]", id))
+			c.Logger().SetHeader(fmt.Sprintf("${level} %s ${prefix} [${short_file}:${line}]", id))
 			return next(c)
 		}
 	})

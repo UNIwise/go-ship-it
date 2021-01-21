@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/labstack/echo/v4"
 	"github.com/pkg/errors"
 
 	semver "github.com/Masterminds/semver/v3"
@@ -25,13 +26,15 @@ type Client interface {
 
 type ClientImpl struct {
 	client *github.Client
+	log    echo.Logger
 }
 
-func NewClient(tc *http.Client) Client {
+func NewClient(tc *http.Client, log echo.Logger) *ClientImpl {
 	cl := github.NewClient(tc)
 
 	return &ClientImpl{
 		client: cl,
+		log:    log,
 	}
 }
 
@@ -50,11 +53,11 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 	if pushed != master {
 		return nil, nil
 	}
-	fmt.Printf("%v pushed. Release scheduled\n", master)
+	c.log.Infof("%v pushed. Scheduling release", master)
 
 	release, _, err := c.client.Repositories.GetLatestRelease(context.TODO(), owner, repo)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "Failed to get latest release")
 	}
 
 	return c.ReleaseCandidate(owner, repo, release.GetTagName(), master)
@@ -72,9 +75,11 @@ func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, e
 		return nil, nil
 	}
 	if version.Prerelease() != "" {
+		c.log.Infof("Promoting release %s", ev.GetRelease().GetName())
 		return c.Promote(ev)
 	}
 
+	c.log.Infof("Cleaning up release candidates of %s", ev.GetRelease().GetName())
 	_, err = c.Cleanup(ev)
 	if err != nil {
 		return nil, err
@@ -105,7 +110,7 @@ func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
 		return nil, err
 	}
 	newVersion, _ := version.SetPrerelease("")
-	fmt.Printf("Creating tag %v with object %v\n", newVersion, ref.GetObject())
+	c.log.Debugf("Creating tag %v with object %v", newVersion, ref.GetObject())
 	_, _, err = c.client.Git.CreateRef(context.TODO(), owner, repo, &github.Reference{
 		Ref:    github.String(fmt.Sprintf("refs/tags/v%v", newVersion)),
 		Object: ref.Object,
@@ -113,7 +118,7 @@ func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("Patching %v with TagName:%v Name:%v Commit:%v\n", release.GetID(), fmt.Sprintf("v%v", newVersion), newVersion.String(), release.GetTargetCommitish())
+	c.log.Debugf("Updating release %v with tag %v", release.GetID(), fmt.Sprintf("v%v", newVersion))
 	_, _, err = c.client.Repositories.EditRelease(context.TODO(), owner, repo, release.GetID(), &github.RepositoryRelease{
 		Name:    github.String(newVersion.String()),
 		TagName: github.String(fmt.Sprintf("v%v", newVersion)),
@@ -125,7 +130,7 @@ func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
 
 	_, err = c.LabelPRs(owner, repo, &newVersion)
 	if err != nil {
-		fmt.Println(err)
+		c.log.Warn("Error while labeling pull requests", err)
 	}
 	return nil, nil
 }
@@ -141,7 +146,7 @@ func (c *ClientImpl) LabelPRs(owner, repo string, next *semver.Version) (interfa
 		return nil, err
 	}
 
-	fmt.Printf("Found %d pull requests\n", len(pulls))
+	c.log.Debug("Found %d pull requests belonging to %s", len(pulls), next.String())
 	_, _, err = c.client.Issues.CreateLabel(context.TODO(), owner, repo, &github.Label{
 		Name: github.String(next.String()),
 	})
@@ -149,11 +154,11 @@ func (c *ClientImpl) LabelPRs(owner, repo string, next *semver.Version) (interfa
 		return nil, err
 	}
 
-	for n, pull := range pulls {
-		fmt.Printf("Labeling %d\n", pull.GetNumber())
+	for n, _ := range pulls {
+		c.log.Debugf("Labeling %d with %s", n, next.String())
 		_, _, err := c.client.Issues.AddLabelsToIssue(context.TODO(), owner, repo, n, []string{next.String()})
 		if err != nil {
-			fmt.Println(err)
+			c.log.Warn("Error while labeling pull request", err)
 		}
 	}
 	return nil, nil
@@ -202,14 +207,15 @@ func (c *ClientImpl) Cleanup(ev *github.ReleaseEvent) (interface{}, error) {
 				// Ensure full releases and current release is not inadvertently deleted
 				continue
 			}
+			c.log.Infof("Deleting release %s", toDelete.GetTagName())
 			_, err = c.client.Repositories.DeleteRelease(context.TODO(), owner, repo, toDelete.GetID())
 			if err != nil {
-				fmt.Println(err)
+				c.log.Warn("Could not delete release", err)
 			}
 		}
 		_, err = c.client.Git.DeleteRef(context.TODO(), owner, repo, r.GetRef())
 		if err != nil {
-			fmt.Println(err)
+			c.log.Warn("Could not delete ref", err)
 		}
 	}
 
@@ -219,12 +225,13 @@ func (c *ClientImpl) Cleanup(ev *github.ReleaseEvent) (interface{}, error) {
 func (c *ClientImpl) ReleaseCandidate(owner, repo, latest, target string) (interface{}, error) {
 	pulls, err := c.getPulls(owner, repo, latest, target)
 	if err != nil {
-		fmt.Printf("Error while examining pull requests, %v\n", err)
+		c.log.Warn("Error while examining pull requests", err)
 	}
 	changelog, err := c.CollectChangelog(pulls)
 	if err != nil {
-		fmt.Println("Error while gathering changelog", err)
+		c.log.Warn("Error while gathering changelog", err)
 	}
+	c.log.Debugf("Gathered changelog from %d pull requests", len(pulls))
 
 	nextTag, err := c.NextTag(owner, repo, latest, pulls)
 	if err != nil {
@@ -238,7 +245,11 @@ func (c *ClientImpl) ReleaseCandidate(owner, repo, latest, target string) (inter
 		TargetCommitish: github.String(target),
 		Body:            github.String(changelog),
 	})
-	return nextTag, err
+	if err != nil {
+		return nil, err
+	}
+	c.log.Infof("Release %s created", nextTag)
+	return nextTag, nil
 }
 
 func (c *ClientImpl) CollectChangelog(pulls map[int]*github.PullRequest) (string, error) {

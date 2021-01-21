@@ -1,8 +1,8 @@
 package pkg
 
 import (
-	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/bradleyfalzon/ghinstallation"
 	"github.com/google/go-github/v32/github"
@@ -34,27 +34,39 @@ func (h *WebhookHandler) HandleGithub(c echo.Context) error {
 	switch event := event.(type) {
 	case *github.PushEvent:
 		k := ghinstallation.NewFromAppsTransport(h.AppsTransport, event.Installation.GetID())
-		client := NewClient(&http.Client{Transport: k})
-		go func() {
-			_, err := client.HandlePushEvent(event)
-			if err != nil {
-				fmt.Println(err)
-			}
-		}()
+		c.Logger().SetPrefix(event.GetRepo().GetFullName())
+		client := NewClient(&http.Client{Transport: k, Timeout: time.Minute}, c.Logger())
+		go handlePushEvent(c, client, event)
 		return c.String(http.StatusAccepted, "Handling push event")
 	case *github.ReleaseEvent:
 		k := ghinstallation.NewFromAppsTransport(h.AppsTransport, event.Installation.GetID())
-		client := NewClient(&http.Client{Transport: k})
-		go func() {
-			_, err := client.HandleReleaseEvent(event)
-			if err != nil {
-				fmt.Println(err)
-			}
-		}()
+		c.Logger().SetPrefix(event.GetRepo().GetFullName())
+		client := NewClient(&http.Client{Transport: k, Timeout: time.Minute}, c.Logger())
+		go handleReleaseEvent(c, client, event)
 		return c.String(http.StatusAccepted, "Handling release event")
 	case *github.PingEvent:
 		return c.String(http.StatusOK, "Got ping event")
 	default:
 		return c.String(http.StatusNotAcceptable, "Unexpected event")
+	}
+}
+
+func handleReleaseEvent(c echo.Context, client Client, ev *github.ReleaseEvent) {
+	c.Logger().Debug("Handling release event")
+	_, err := client.HandleReleaseEvent(ev)
+	if err != nil {
+		c.Logger().Error(err)
+	} else {
+		c.Logger().Info("Handled release event")
+	}
+}
+
+func handlePushEvent(c echo.Context, client Client, ev *github.PushEvent) {
+	c.Logger().Debug("Handling push event")
+	_, err := client.HandlePushEvent(ev)
+	if err != nil {
+		c.Logger().Error(err)
+	} else {
+		c.Logger().Debug("Handled push event")
 	}
 }
