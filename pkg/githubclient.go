@@ -76,13 +76,14 @@ func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, e
 	}
 	if version.Prerelease() != "" {
 		c.log.Infof("Promoting release %s", ev.GetRelease().GetName())
+
 		return c.Promote(ev)
 	}
 
 	c.log.Infof("Cleaning up release candidates of %s", ev.GetRelease().GetName())
 	_, err = c.Cleanup(ev)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "Error while cleaning up release candidates")
 	}
 
 	curr := release.GetTagName()
@@ -91,6 +92,7 @@ func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, e
 	if comparison.GetTotalCommits() != 0 {
 		return c.ReleaseCandidate(ev.GetRepo().GetOwner().GetLogin(), ev.GetRepo().GetName(), ev.GetRelease().GetTagName(), ev.GetRepo().GetDefaultBranch())
 	}
+
 	return nil, nil
 }
 
@@ -102,60 +104,62 @@ func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
 
 	version, err := semver.NewVersion(release.GetTagName())
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "Error while establishing semver from %s", release.GetTagName())
 	}
 
 	ref, _, err := c.client.Git.GetRef(context.TODO(), owner, repo, fmt.Sprintf("tags/%s", release.GetTagName()))
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "Could not fetch tags tags/%s", release.GetTagName())
 	}
 	newVersion, _ := version.SetPrerelease("")
-	c.log.Debugf("Creating tag %v with object %v", newVersion, ref.GetObject())
+	c.log.Debugf("Creating tag v%v @ %s", newVersion, ref.GetObject().GetSHA())
 	_, _, err = c.client.Git.CreateRef(context.TODO(), owner, repo, &github.Reference{
 		Ref:    github.String(fmt.Sprintf("refs/tags/v%v", newVersion)),
 		Object: ref.Object,
 	})
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "Error while creating new tag v%v", newVersion)
 	}
-	c.log.Debugf("Updating release %v with tag %v", release.GetID(), fmt.Sprintf("v%v", newVersion))
+	c.log.Debugf("Updating release %v with tag v%v", release.GetID(), newVersion)
 	_, _, err = c.client.Repositories.EditRelease(context.TODO(), owner, repo, release.GetID(), &github.RepositoryRelease{
 		Name:    github.String(newVersion.String()),
 		TagName: github.String(fmt.Sprintf("v%v", newVersion)),
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "Error while updating release %v with tag v%v", release.GetID(), newVersion)
 	}
 
+	c.log.Infof("Labeling pull requests belonging to v%s", newVersion)
 	_, err = c.LabelPRs(owner, repo, &newVersion)
 	if err != nil {
 		c.log.Warn("Error while labeling pull requests", err)
 	}
+
 	return nil, nil
 }
 
 func (c *ClientImpl) LabelPRs(owner, repo string, next *semver.Version) (interface{}, error) {
 	last, err := c.FindLast(owner, repo, next)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "Could not find latest release candidate of v%s", next)
 	}
 
-	pulls, err := c.getPulls(owner, repo, fmt.Sprintf("v%v", last.String()), fmt.Sprintf("v%v", next.String()))
+	pulls, err := c.getPulls(owner, repo, fmt.Sprintf("v%s", last), fmt.Sprintf("v%s", next))
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "Could not find pull requests associated with v%s", next)
 	}
 
-	c.log.Debug("Found %d pull requests belonging to %s", len(pulls), next.String())
+	c.log.Debugf("Found %d pull requests belonging to %s", len(pulls), next)
 	_, _, err = c.client.Issues.CreateLabel(context.TODO(), owner, repo, &github.Label{
 		Name: github.String(next.String()),
 	})
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "Could not create label %s", next)
 	}
 
 	for n, _ := range pulls {
-		c.log.Debugf("Labeling %d with %s", n, next.String())
+		c.log.Debugf("Labeling #%d with %s", n, next.String())
 		_, _, err := c.client.Issues.AddLabelsToIssue(context.TODO(), owner, repo, n, []string{next.String()})
 		if err != nil {
 			c.log.Warn("Error while labeling pull request", err)

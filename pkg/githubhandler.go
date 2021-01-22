@@ -55,9 +55,7 @@ func handleReleaseEvent(c echo.Context, client Client, ev *github.ReleaseEvent) 
 	c.Logger().Debug("Handling release event")
 	_, err := client.HandleReleaseEvent(ev)
 	if err != nil {
-		c.Logger().Error(err)
-	} else {
-		c.Logger().Info("Handled release event")
+		c.Logger().Error("Error handling release event", err)
 	}
 }
 
@@ -65,8 +63,6 @@ func handlePushEvent(c echo.Context, client Client, ev *github.PushEvent) {
 	c.Logger().Debug("Handling push event")
 	_, err := client.HandlePushEvent(ev)
 	if err != nil {
-		c.Logger().Error(err)
-	} else {
-		c.Logger().Debug("Handled push event")
+		c.Logger().Error("Error handling push event", err)
 	}
 }

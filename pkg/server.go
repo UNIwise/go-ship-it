@@ -47,12 +47,13 @@ func (s *ServerImpl) Serve() error {
 			if id == "" {
 				id = c.Response().Header().Get(echo.HeaderXRequestID)
 			}
-			c.Logger().SetHeader(fmt.Sprintf("${level} %s ${prefix} [${short_file}:${line}]", id))
+			logger := log.New(id)
+			logger.SetLevel(s.LogLevel)
+			logger.SetHeader(fmt.Sprintf("${level} %s ${prefix} [${short_file}:${line}]", id))
+			c.SetLogger(logger)
 			return next(c)
 		}
 	})
-
-	e.Logger.SetLevel(s.LogLevel)
 
 	e.POST("/github", handler.HandleGithub)
 	e.GET("/", func(c echo.Context) error {
