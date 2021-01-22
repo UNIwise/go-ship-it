@@ -78,5 +78,6 @@ tolerations: []
 
 affinity: {}
 
+loglevel: info
 githubsecret: "OMITTED"
 keypem: "OMITTED"

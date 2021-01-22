@@ -46,8 +46,10 @@ spec:
                 secretKeyRef:
                   name: {{ include "go-ship-it.fullname" . }}
                   key: webhook-secret
-            - name: GITHUB_CERT_PATH
+            - name: GITHUB_KEYFILE
               value: /keys/key.pem
+            - name: SERVER_LOGLEVEL
+              value: {{ .Values.loglevel | quote }}
           volumeMounts:
             - name: key
               mountPath: /keys/
