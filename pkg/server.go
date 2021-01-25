@@ -5,11 +5,13 @@ import (
 	"net/http"
 
 	"github.com/bradleyfalzon/ghinstallation"
+
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/labstack/gommon/log"
 	"github.com/labstack/gommon/random"
 	"github.com/pkg/errors"
+	"gopkg.in/gookit/color.v1"
 )
 
 type Server interface {
@@ -37,19 +39,16 @@ func (s *ServerImpl) Serve() error {
 	e.Use(middleware.RequestIDWithConfig(middleware.RequestIDConfig{
 		Skipper: middleware.DefaultSkipper,
 		Generator: func() string {
-			return random.String(8)
+			return random.String(10, random.Hex)
 		},
 	}))
 
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			id := c.Request().Header.Get(echo.HeaderXRequestID)
-			if id == "" {
-				id = c.Response().Header().Get(echo.HeaderXRequestID)
-			}
+			id := c.Response().Header().Get(echo.HeaderXRequestID)
 			logger := log.New(id)
 			logger.SetLevel(s.LogLevel)
-			logger.SetHeader(fmt.Sprintf("${level} %s ${prefix} [${short_file}:${line}]", id))
+			logger.SetHeader(fmt.Sprintf("${level}\t%s\t${prefix}\t[${short_file}:${line}]\t", color.HEX(id[0:6]).Sprint(id)))
 			c.SetLogger(logger)
 			return next(c)
 		}
