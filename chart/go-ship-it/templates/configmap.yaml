@@ -4,7 +4,6 @@ metadata:
   name: {{ include "go-ship-it.fullname" . }}
   labels:
     {{- include "go-ship-it.labels" . | nindent 4 }}
-type: Opaque
 data:
   config.yaml: |-
     {{ toYaml .Values.config | nindent 4 }}
