@@ -52,7 +52,7 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.test-flight.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.go-ship-it)")
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -69,7 +69,7 @@ func initConfig() {
 			os.Exit(1)
 		}
 
-		// Search config in home directory with name ".test-flight" (without extension).
+		// Search config in home directory with name ".go-ship-it" (without extension).
 		viper.AddConfigPath(home)
 		viper.SetConfigName(".go-ship-it")
 	}
