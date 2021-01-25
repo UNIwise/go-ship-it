@@ -13,10 +13,12 @@ spec:
       {{- include "go-ship-it.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-    {{- with .Values.podAnnotations }}
       annotations:
+        checksum/config: {{ toJson .Values.config | sha256sum }}
+        checksum/secret: {{ printf "%s.%s" .Values.githubsecret .Values.keypem | sha256sum }} 
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-    {{- end }}
+        {{- end }}
       labels:
         {{- include "go-ship-it.selectorLabels" . | nindent 8 }}
     spec:
@@ -27,6 +29,9 @@ spec:
             items: 
               - key: "key.pem"
                 path: "key.pem"
+        - name: config
+          configMap:
+            name: {{ include "go-ship-it.fullname" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -40,6 +45,8 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --config=/config/config.yaml
           env:
             - name: GITHUB_SECRET
               valueFrom:
@@ -48,14 +55,15 @@ spec:
                   key: webhook-secret
             - name: GITHUB_KEYFILE
               value: /keys/key.pem
-            - name: SERVER_LOGLEVEL
-              value: {{ .Values.loglevel | quote }}
           volumeMounts:
             - name: key
               mountPath: /keys/
+            - name: config
+              mountPath: /config/config.yaml
+              subPath: config.yaml
           ports:
             - name: http
-              containerPort: 1323
+              containerPort: {{ default 80 .Values.config.server.port }}
               protocol: TCP
           livenessProbe:
             httpGet:

@@ -78,6 +78,10 @@ tolerations: []
 
 affinity: {}
 
-loglevel: info
+config:
+  server:
+    port: 80
+    loglevel: info
+
 githubsecret: "OMITTED"
 keypem: "OMITTED"
