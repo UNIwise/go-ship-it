@@ -8,4 +8,3 @@ type: Opaque
 data:
   config.yaml: |-
     {{ toYaml .Values.config | nindent 4 }}
-  
