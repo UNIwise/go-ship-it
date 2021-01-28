@@ -130,7 +130,7 @@ func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
 		return nil, errors.Wrapf(err, "Error while updating release %v with tag v%v", release.GetID(), newVersion)
 	}
 
-	c.log.Infof("Labeling pull requests belonging to v%s", newVersion)
+	c.log.Infof("Creating milestone for pull requests belonging to v%s", newVersion)
 	_, err = c.LabelPRs(owner, repo, &newVersion)
 	if err != nil {
 		c.log.Warn("Error while labeling pull requests", err)
@@ -151,18 +151,21 @@ func (c *ClientImpl) LabelPRs(owner, repo string, next *semver.Version) (interfa
 	}
 
 	c.log.Debugf("Found %d pull requests belonging to %s", len(pulls), next)
-	_, _, err = c.client.Issues.CreateLabel(context.TODO(), owner, repo, &github.Label{
-		Name: github.String(next.String()),
+	milestone, _, err := c.client.Issues.CreateMilestone(context.TODO(), owner, repo, &github.Milestone{
+		Title: github.String(next.String()),
+		State: github.String("closed"),
 	})
 	if err != nil {
-		return nil, errors.Wrapf(err, "Could not create label %s", next)
+		return nil, errors.Wrapf(err, "Could not create milestone %s", next)
 	}
 
 	for n, _ := range pulls {
-		c.log.Debugf("Labeling #%d with %s", n, next.String())
-		_, _, err := c.client.Issues.AddLabelsToIssue(context.TODO(), owner, repo, n, []string{next.String()})
+		c.log.Debugf("Adding #%d to milestone %s", n, next.String())
+		_, _, err := c.client.Issues.Edit(context.TODO(), owner, repo, n, &github.IssueRequest{
+			Milestone: milestone.Number,
+		})
 		if err != nil {
-			c.log.Warn("Error while labeling pull request", err)
+			c.log.Warn("Error adding pull request to milestone ", err)
 		}
 	}
 	return nil, nil
