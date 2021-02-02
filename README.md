@@ -25,10 +25,18 @@ If a pull request included in the release includes changelog on the form:
     This text will show up in the release notes
     ```
 
+## Promotion
+
+Promotions can be triggered by editing a pre-release, and unchecking the pre-release checkbox. This will cause go-ship-it to
+
+- Update the tag and name of the release to be the full release
+- Remove all pre-releases of that release
+- Create a new pre-release for the next version, if the targetBranch is not fully included in the full release
+
 ## Configuration
 
 The behaviour can be configured with yaml in a `.ship-it` file at the root of the repository
 
-| key | default | description
-|---|---|---
-| targetBranch | "" | Specifies which branch to trigger new releases from. Leave empty for default repository branch.
+| key          | default | description                                                                                    |
+| ------------ | ------- | ---------------------------------------------------------------------------------------------- |
+| targetBranch | ""      | Specifies which branch to trigger new releases from. Leave empty for default repository branch |
