@@ -3,6 +3,7 @@ package pkg
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -20,8 +21,9 @@ var (
 )
 
 type Client interface {
-	HandlePushEvent(*github.PushEvent) (interface{}, error)
-	HandleReleaseEvent(*github.ReleaseEvent) (interface{}, error)
+	HandlePushEvent(*github.PushEvent, Config) (interface{}, error)
+	HandleReleaseEvent(*github.ReleaseEvent, Config) (interface{}, error)
+	GetFile(repo Repo, ref, file string) (io.ReadCloser, error)
 }
 
 type ClientImpl struct {
@@ -44,11 +46,14 @@ func init() {
 	candidateRx = regexp.MustCompile("^rc.(?P<candidate>[0-9]+)$")
 }
 
-func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) {
+func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent, config Config) (interface{}, error) {
 	owner := ev.GetRepo().GetOwner().GetLogin()
 	repo := ev.GetRepo().GetName()
 	pushed := strings.TrimPrefix(ev.GetRef(), "refs/heads/")
 	master := ev.GetRepo().GetMasterBranch()
+	if config.TargetBranch != "" {
+		master = config.TargetBranch
+	}
 
 	if pushed != master {
 		return nil, nil
@@ -63,7 +68,7 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) 
 	return c.ReleaseCandidate(owner, repo, release.GetTagName(), master)
 }
 
-func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, error) {
+func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent, config Config) (interface{}, error) {
 	owner := ev.GetRepo().GetOwner().GetLogin()
 	repo := ev.GetRepo().GetName()
 	release := ev.GetRelease()
@@ -87,10 +92,13 @@ func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, e
 	}
 
 	curr := release.GetTagName()
-	next := ev.GetRepo().GetDefaultBranch()
+	next := ev.GetRepo().GetMasterBranch()
+	if config.TargetBranch != "" {
+		next = config.TargetBranch
+	}
 	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), owner, repo, curr, next)
 	if comparison.GetTotalCommits() != 0 {
-		return c.ReleaseCandidate(ev.GetRepo().GetOwner().GetLogin(), ev.GetRepo().GetName(), ev.GetRelease().GetTagName(), ev.GetRepo().GetDefaultBranch())
+		return c.ReleaseCandidate(ev.GetRepo().GetOwner().GetLogin(), ev.GetRepo().GetName(), ev.GetRelease().GetTagName(), next)
 	}
 
 	return nil, nil
@@ -362,4 +370,10 @@ func (c *ClientImpl) getRefs(owner, repo, prefix string) ([]*github.Reference, e
 		page = out.NextPage
 	}
 	return references, nil
+}
+
+func (c *ClientImpl) GetFile(repo Repo, ref, file string) (io.ReadCloser, error) {
+	return c.client.Repositories.DownloadContents(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName(), file, &github.RepositoryContentGetOptions{
+		Ref: ref,
+	})
 }
