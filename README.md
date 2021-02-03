@@ -1,5 +1,7 @@
 # Go ship it!
 
+![logo](docs/logo.png)
+
 A github app for managing github releases
 
 go-ship-it takes care of:
