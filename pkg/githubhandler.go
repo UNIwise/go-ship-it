@@ -8,8 +8,11 @@ import (
 	"github.com/google/go-github/v32/github"
 	"github.com/labstack/echo/v4"
 	"github.com/pkg/errors"
+	"gopkg.in/go-playground/validator.v9"
 	"gopkg.in/yaml.v2"
 )
+
+var validate *validator.Validate = validator.New()
 
 type WebhookHandler struct {
 	Secret        []byte
@@ -30,6 +33,7 @@ type HandledEvent interface {
 type Repo interface {
 	GetOwner() *github.User
 	GetName() string
+	GetDefaultBranch() string
 }
 
 func (h *WebhookHandler) initClient(c echo.Context, ev HandledEvent, prefix string) (echo.Logger, *ClientImpl) {
@@ -99,13 +103,23 @@ func handlePushEvent(l echo.Logger, client Client, ev *github.PushEvent) {
 	}
 }
 
+type LabelsConfig struct {
+	Major string `yaml:"major,omitempty"`
+	Minor string `yaml:"minor,omitempty"`
+}
+
 type Config struct {
-	TargetBranch string `yaml:"targetBranch,omitempty"`
+	TargetBranch string       `yaml:"targetBranch,omitempty" validate:"required"`
+	Labels       LabelsConfig `yaml:"labels,omitempty"`
 }
 
 func getConfig(l echo.Logger, client Client, repo Repo, ref string) (*Config, error) {
 	config := &Config{
-		TargetBranch: "",
+		TargetBranch: repo.GetDefaultBranch(),
+		Labels: LabelsConfig{
+			Major: "major",
+			Minor: "minor",
+		},
 	}
 	reader, err := client.GetFile(repo, ref, ".ship-it")
 	if err != nil {
@@ -117,12 +131,8 @@ func getConfig(l echo.Logger, client Client, repo Repo, ref string) (*Config, er
 	if err := decoder.Decode(config); err != nil {
 		return nil, errors.Wrap(err, "Error decoding config file")
 	}
-	if err := config.validate(); err != nil {
-		return nil, errors.Wrap(err, "Failed to validate config file")
+	if err := validate.Struct(config); err != nil {
+		return nil, errors.Wrap(err, "Could not validate configuration")
 	}
 	return config, nil
-}
-
-func (c *Config) validate() error {
-	return nil
 }

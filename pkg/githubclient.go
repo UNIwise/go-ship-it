@@ -50,10 +50,7 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent, config Config) (inter
 	owner := ev.GetRepo().GetOwner().GetLogin()
 	repo := ev.GetRepo().GetName()
 	pushed := strings.TrimPrefix(ev.GetRef(), "refs/heads/")
-	master := ev.GetRepo().GetMasterBranch()
-	if config.TargetBranch != "" {
-		master = config.TargetBranch
-	}
+	master := config.TargetBranch
 
 	if pushed != master {
 		return nil, nil
@@ -65,7 +62,7 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent, config Config) (inter
 		return nil, errors.Wrap(err, "Failed to get latest release")
 	}
 
-	return c.ReleaseCandidate(owner, repo, release.GetTagName(), master)
+	return c.ReleaseCandidate(owner, repo, release.GetTagName(), master, config)
 }
 
 func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent, config Config) (interface{}, error) {
@@ -92,13 +89,10 @@ func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent, config Config) 
 	}
 
 	curr := release.GetTagName()
-	next := ev.GetRepo().GetMasterBranch()
-	if config.TargetBranch != "" {
-		next = config.TargetBranch
-	}
+	next := config.TargetBranch
 	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), owner, repo, curr, next)
 	if comparison.GetTotalCommits() != 0 {
-		return c.ReleaseCandidate(ev.GetRepo().GetOwner().GetLogin(), ev.GetRepo().GetName(), ev.GetRelease().GetTagName(), next)
+		return c.ReleaseCandidate(ev.GetRepo().GetOwner().GetLogin(), ev.GetRepo().GetName(), ev.GetRelease().GetTagName(), next, config)
 	}
 
 	return nil, nil
@@ -237,7 +231,7 @@ func (c *ClientImpl) Cleanup(ev *github.ReleaseEvent) (interface{}, error) {
 	return nil, nil
 }
 
-func (c *ClientImpl) ReleaseCandidate(owner, repo, latest, target string) (interface{}, error) {
+func (c *ClientImpl) ReleaseCandidate(owner, repo, latest, target string, config Config) (interface{}, error) {
 	pulls, err := c.getPulls(owner, repo, latest, target)
 	if err != nil {
 		c.log.Warn("Error while examining pull requests", err)
@@ -248,7 +242,7 @@ func (c *ClientImpl) ReleaseCandidate(owner, repo, latest, target string) (inter
 	}
 	c.log.Debugf("Gathered changelog from %d pull requests", len(pulls))
 
-	nextTag, err := c.NextTag(owner, repo, latest, pulls)
+	nextTag, err := c.NextTag(owner, repo, latest, pulls, config)
 	if err != nil {
 		return nil, errors.Wrap(err, "Could not calculate next tag")
 	}
@@ -282,7 +276,7 @@ func (c *ClientImpl) CollectChangelog(pulls map[int]*github.PullRequest) (string
 	return fmt.Sprintf("Changes:\n\n%s", strings.Join(logentries, "\n")), nil
 }
 
-func (c *ClientImpl) NextTag(owner, repo, latest string, pulls map[int]*github.PullRequest) (string, error) {
+func (c *ClientImpl) NextTag(owner, repo, latest string, pulls map[int]*github.PullRequest, config Config) (string, error) {
 	v, err := semver.NewVersion(latest)
 	if err != nil {
 		return "", err
@@ -292,10 +286,10 @@ func (c *ClientImpl) NextTag(owner, repo, latest string, pulls map[int]*github.P
 out:
 	for _, pr := range pulls {
 		for _, label := range pr.Labels {
-			if label.GetName() == "minor" {
+			if label.GetName() == config.Labels.Minor {
 				nextVersion = v.IncMinor()
 			}
-			if label.GetName() == "major" {
+			if label.GetName() == config.Labels.Major {
 				nextVersion = v.IncMajor()
 				break out
 			}
