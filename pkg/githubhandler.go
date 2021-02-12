@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bradleyfalzon/ghinstallation"
@@ -81,6 +82,7 @@ func handleReleaseEvent(l echo.Logger, client Client, ev *github.ReleaseEvent) {
 		l.Error("Config is nil")
 		return
 	}
+
 	if _, err := client.HandleReleaseEvent(ev, *config); err != nil {
 		l.Error("Error handling release event", err)
 	}
@@ -98,6 +100,33 @@ func handlePushEvent(l echo.Logger, client Client, ev *github.PushEvent) {
 		return
 	}
 
+	if strings.TrimPrefix(ev.GetRef(), "refs/heads/") != config.TargetBranch {
+		return
+	}
+
+	l.Infof("%s pushed. Releasing...", config.TargetBranch)
+
+	release, err := client.GetLatestTag(ev.GetRepo())
+	if err != nil {
+		l.Error("Could not get latest release ", err)
+		return
+	}
+
+	comparison, err := client.GetCommitRange(ev.GetRepo(), release.Original(), ev.GetAfter())
+	if err != nil {
+		l.Errorf("Could not get commit comparison between '%s' and '%s' err=%v", release.Original(), ev.GetAfter(), err)
+		return
+	}
+
+	pulls, err := GetPullsInCommitRange(ev.GetRepo(), comparison.Commits)
+	if err != nil {
+		l.Error("Could not get pull requests in commit range ", err)
+		return
+	}
+
+	
+
+
 	if _, err := client.HandlePushEvent(ev, *config); err != nil {
 		l.Error("Error handling push event", err)
 	}
@@ -108,9 +137,14 @@ type LabelsConfig struct {
 	Minor string `yaml:"minor,omitempty"`
 }
 
+type Strategy struct {
+	Type string `yaml:"type,omitempty" validate:"oneof=pre-release full-release"`
+}
+
 type Config struct {
 	TargetBranch string       `yaml:"targetBranch,omitempty" validate:"required"`
 	Labels       LabelsConfig `yaml:"labels,omitempty"`
+	Strategy     Strategy     `yaml:"strategy,omitempty"`
 }
 
 func getConfig(l echo.Logger, client Client, repo Repo, ref string) (*Config, error) {
@@ -119,6 +153,9 @@ func getConfig(l echo.Logger, client Client, repo Repo, ref string) (*Config, er
 		Labels: LabelsConfig{
 			Major: "major",
 			Minor: "minor",
+		},
+		Strategy: Strategy{
+			Type: "pre-release",
 		},
 	}
 	reader, err := client.GetFile(repo, ref, ".ship-it")

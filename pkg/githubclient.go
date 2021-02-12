@@ -24,6 +24,9 @@ type Client interface {
 	HandlePushEvent(*github.PushEvent, Config) (interface{}, error)
 	HandleReleaseEvent(*github.ReleaseEvent, Config) (interface{}, error)
 	GetFile(repo Repo, ref, file string) (io.ReadCloser, error)
+	GetLatestTag(repo Repo) (*semver.Version, error)
+	GetCommitRange(repo Repo, base, head string) (*github.CommitsComparison, error)
+	GetPullsInCommitRange(repo Repo, commits []*github.RepositoryCommit) ([]*github.PullRequest, error)
 }
 
 type ClientImpl struct {
@@ -315,45 +318,91 @@ out:
 	return fmt.Sprintf("v%v-rc.%d", nextVersion, rc), nil
 }
 
-func (c *ClientImpl) getPulls(owner, repo, latest, current string) (map[int]*github.PullRequest, error) {
-	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), owner, repo, latest, current)
+// func (c *ClientImpl) getPulls(repo Repo, latest, current string) (map[int]*github.PullRequest, error) {
+// 	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName(), latest, current)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	pulls := make(map[int]*github.PullRequest)
+// 	for _, commit := range comparison.Commits {
+// 		page := 0
+// 		for {
+// 			prs, out, err := c.client.PullRequests.ListPullRequestsWithCommit(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName(), commit.GetSHA(), &github.PullRequestListOptions{ListOptions: github.ListOptions{Page: page}})
+// 			if err != nil {
+// 				return nil, err
+// 			}
+// 			for _, pr := range prs {
+// 				if pr.GetNumber() != 0 {
+// 					pulls[pr.GetNumber()] = pr
+// 				} else {
+// 					return nil, errors.New("Could not get pull request number")
+// 				}
+// 			}
+// 			if out.NextPage == 0 {
+// 				break
+// 			}
+// 			page = out.NextPage
+// 		}
+// 	}
+// 	return pulls, nil
+// }
+
+func (c *ClientImpl) GetCommitRange(repo Repo, base, head string) (*github.CommitsComparison, error) {
+	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName(), base, head)
 	if err != nil {
 		return nil, err
 	}
+	return comparison, nil
+}
+
+func (c *ClientImpl) GetPullsInCommitRange(repo Repo, commits []*github.RepositoryCommit) ([]*github.PullRequest, error) {
 	max := 100
-	if len(comparison.Commits) < 100 {
-		max = len(comparison.Commits)
+	if len(commits) < 100 {
+		max = len(commits)
 	}
-	pulls := make(map[int]*github.PullRequest)
-	for _, commit := range comparison.Commits[:max] {
-		page := 0
-		for {
-			prs, out, err := c.client.PullRequests.ListPullRequestsWithCommit(context.TODO(), owner, repo, commit.GetSHA(), &github.PullRequestListOptions{ListOptions: github.ListOptions{Page: page}})
-			if err != nil {
-				return nil, err
-			}
-			for _, pr := range prs {
-				if pr.GetNumber() != 0 {
-					pulls[pr.GetNumber()] = pr
-				} else {
-					return nil, errors.New("Could not get pull request number")
-				}
-			}
-			if out.NextPage == 0 {
-				break
-			}
-			page = out.NextPage
+	pulls := []*github.PullRequest{}
+	for _, commit := range commits[:max] {
+		prs, err := c.paginatePullsWithCommit(repo, commit.GetSHA(), &github.PullRequestListOptions{})
+		if err != nil {
+			return nil, errors.Wrap(err, "Could not paginate pull requests")
 		}
+		pulls = append(pulls, prs...)
 	}
 	return pulls, nil
 }
 
-func (c *ClientImpl) getRefs(owner, repo, prefix string) ([]*github.Reference, error) {
+func (c *ClientImpl) paginatePullsWithCommit(repo Repo, sha string, opts *github.PullRequestListOptions) ([]*github.PullRequest, error) {
+	page := 0
+	pulls := []*github.PullRequest{}
+	for {
+		prs, out, err := c.client.PullRequests.ListPullRequestsWithCommit(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName(), sha, &github.PullRequestListOptions{
+			State:     opts.State,
+			Head:      opts.Head,
+			Base:      opts.Base,
+			Sort:      opts.Sort,
+			Direction: opts.Direction,
+			ListOptions: github.ListOptions{
+				Page: page,
+			},
+		})
+		if err != nil {
+			return nil, errors.Wrap(err, "Error listing pull requests")
+		}
+		pulls = append(pulls, prs...)
+		if out.NextPage == 0 {
+			break
+		}
+		page = out.NextPage
+	}
+	return pulls, nil
+}
+
+func (c *ClientImpl) paginateRefs(repo Repo, opts *github.ReferenceListOptions) ([]*github.Reference, error) {
 	page := 0
 	references := []*github.Reference{}
 	for {
-		refs, out, err := c.client.Git.ListMatchingRefs(context.TODO(), owner, repo, &github.ReferenceListOptions{
-			Ref: prefix,
+		refs, out, err := c.client.Git.ListMatchingRefs(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName(), &github.ReferenceListOptions{
+			Ref: opts.Ref,
 			ListOptions: github.ListOptions{
 				Page: page,
 			},
@@ -374,4 +423,16 @@ func (c *ClientImpl) GetFile(repo Repo, ref, file string) (io.ReadCloser, error)
 	return c.client.Repositories.DownloadContents(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName(), file, &github.RepositoryContentGetOptions{
 		Ref: ref,
 	})
+}
+
+func (c *ClientImpl) GetLatestTag(repo Repo) (*semver.Version, error) {
+	release, _, err := c.client.Repositories.GetLatestRelease(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName())
+	if err != nil {
+		return nil, errors.Wrap(err, "Could not get latest release")
+	}
+	version, err := semver.NewVersion(release.GetTagName())
+	if err != nil {
+		return nil, errors.Wrap(err, "Could not parse tag as semver")
+	}
+	return version, nil
 }
