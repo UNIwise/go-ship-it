@@ -326,8 +326,12 @@ func (c *ClientImpl) getPulls(owner, repo, latest, current string) (map[int]*git
 	if err != nil {
 		return nil, err
 	}
+	max := 100
+	if len(comparison.Commits) < 100 {
+		max = len(comparison.Commits)
+	}
 	pulls := make(map[int]*github.PullRequest)
-	for _, commit := range comparison.Commits {
+	for _, commit := range comparison.Commits[:max] {
 		page := 0
 		for {
 			prs, out, err := c.client.PullRequests.ListPullRequestsWithCommit(context.TODO(), owner, repo, commit.GetSHA(), &github.PullRequestListOptions{ListOptions: github.ListOptions{Page: page}})
