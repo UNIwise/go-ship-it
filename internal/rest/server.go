@@ -1,4 +1,4 @@
-package pkg
+package rest
 
 import (
 	"fmt"
@@ -35,6 +35,7 @@ func (s *ServerImpl) Serve() error {
 	handler := NewHandler(atr, s.GithubSecret)
 
 	e := echo.New()
+	e.Use(middleware.Recover())
 
 	e.Use(middleware.RequestIDWithConfig(middleware.RequestIDConfig{
 		Skipper: middleware.DefaultSkipper,

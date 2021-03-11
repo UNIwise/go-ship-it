@@ -1,4 +1,4 @@
-package pkg
+package rest
 
 import (
 	"net/http"
@@ -9,6 +9,7 @@ import (
 	"github.com/google/go-github/v32/github"
 	"github.com/labstack/echo/v4"
 	"github.com/pkg/errors"
+	"github.com/uniwise/go-ship-it/internal/scm"
 	"gopkg.in/go-playground/validator.v9"
 	"gopkg.in/yaml.v2"
 )
@@ -37,11 +38,11 @@ type Repo interface {
 	GetDefaultBranch() string
 }
 
-func (h *WebhookHandler) initClient(c echo.Context, ev HandledEvent, prefix string) (echo.Logger, *ClientImpl) {
+func (h *WebhookHandler) initClient(c echo.Context, ev HandledEvent, prefix string) (echo.Logger, *scm.ClientImpl) {
 	k := ghinstallation.NewFromAppsTransport(h.AppsTransport, ev.GetInstallation().GetID())
 	l := c.Logger()
 	l.SetPrefix(prefix)
-	client := NewClient(&http.Client{Transport: k, Timeout: time.Minute}, l)
+	client := scm.NewClient(&http.Client{Transport: k, Timeout: time.Minute}, l)
 	return l, client
 }
 
@@ -71,7 +72,7 @@ func (h *WebhookHandler) HandleGithub(c echo.Context) error {
 	}
 }
 
-func handleReleaseEvent(l echo.Logger, client Client, ev *github.ReleaseEvent) {
+func handleReleaseEvent(l echo.Logger, client scm.Client, ev *github.ReleaseEvent) {
 	l.Debug("Handling release event")
 	config, err := getConfig(l, client, ev.GetRepo(), ev.GetRelease().GetTargetCommitish())
 	if err != nil {
@@ -88,7 +89,7 @@ func handleReleaseEvent(l echo.Logger, client Client, ev *github.ReleaseEvent) {
 	}
 }
 
-func handlePushEvent(l echo.Logger, client Client, ev *github.PushEvent) {
+func handlePushEvent(l echo.Logger, client scm.Client, ev *github.PushEvent) {
 	l.Debug("Handling push event")
 	config, err := getConfig(l, client, ev.GetRepo(), ev.GetAfter())
 	if err != nil {
@@ -118,14 +119,11 @@ func handlePushEvent(l echo.Logger, client Client, ev *github.PushEvent) {
 		return
 	}
 
-	pulls, err := GetPullsInCommitRange(ev.GetRepo(), comparison.Commits)
+	pulls, err := client.GetPullsInCommitRange(ev.GetRepo(), comparison.Commits)
 	if err != nil {
 		l.Error("Could not get pull requests in commit range ", err)
 		return
 	}
-
-	
-
 
 	if _, err := client.HandlePushEvent(ev, *config); err != nil {
 		l.Error("Error handling push event", err)
@@ -147,7 +145,7 @@ type Config struct {
 	Strategy     Strategy     `yaml:"strategy,omitempty"`
 }
 
-func getConfig(l echo.Logger, client Client, repo Repo, ref string) (*Config, error) {
+func getConfig(l echo.Logger, client scm.Client, repo Repo, ref string) (*Config, error) {
 	config := &Config{
 		TargetBranch: repo.GetDefaultBranch(),
 		Labels: LabelsConfig{

@@ -19,7 +19,7 @@ import (
 	"github.com/labstack/gommon/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/uniwise/go-ship-it/pkg"
+	"github.com/uniwise/go-ship-it/internal/rest"
 )
 
 // serveCmd represents the serve command
@@ -43,7 +43,7 @@ var serveCmd = &cobra.Command{
 			lvl = log.INFO
 		}
 
-		s := &pkg.ServerImpl{
+		s := &rest.ServerImpl{
 			AppID:          viper.GetInt64("github.appid"),
 			PrivateKeyFile: viper.GetString("github.keyfile"),
 			GithubSecret:   []byte(viper.GetString("github.secret")),
