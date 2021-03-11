@@ -28,22 +28,14 @@ func NewHandler(atr *ghinstallation.AppsTransport, secret []byte) *WebhookHandle
 	}
 }
 
-type HandledEvent interface {
+type HandledGithubEvent interface {
 	GetInstallation() *github.Installation
 }
 
-type Repo interface {
-	GetOwner() *github.User
-	GetName() string
-	GetDefaultBranch() string
-}
-
-func (h *WebhookHandler) initClient(c echo.Context, ev HandledEvent, prefix string) (echo.Logger, *scm.ClientImpl) {
+func (h *WebhookHandler) initGithubClient(c echo.Context, ev HandledGithubEvent, repo scm.Repo) *scm.GithubClientImpl {
 	k := ghinstallation.NewFromAppsTransport(h.AppsTransport, ev.GetInstallation().GetID())
-	l := c.Logger()
-	l.SetPrefix(prefix)
-	client := scm.NewClient(&http.Client{Transport: k, Timeout: time.Minute}, l)
-	return l, client
+	client := scm.NewGithubClient(&http.Client{Transport: k, Timeout: time.Minute}, c.Logger(), repo)
+	return client
 }
 
 func (h *WebhookHandler) HandleGithub(c echo.Context) error {
@@ -58,12 +50,15 @@ func (h *WebhookHandler) HandleGithub(c echo.Context) error {
 
 	switch event := event.(type) {
 	case *github.PushEvent:
-		logger, client := h.initClient(c, event, event.GetRepo().GetFullName())
-		go handlePushEvent(logger, client, event)
+		client := h.initGithubClient(c, event, event.GetRepo())
+
+		// go handlePushEvent(logger, client, event)
 		return c.String(http.StatusAccepted, "Handling push event")
 	case *github.ReleaseEvent:
-		logger, client := h.initClient(c, event, event.GetRepo().GetFullName())
-		go handleReleaseEvent(logger, client, event)
+		client := h.initGithubClient(c, event, event.GetRepo())
+
+		// go client.HandleReleaseEvent()
+		// go handleReleaseEvent(logger, client, event)
 		return c.String(http.StatusAccepted, "Handling release event")
 	case *github.PingEvent:
 		return c.String(http.StatusOK, "Got ping event")

@@ -9,8 +9,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-playground/validator"
 	"github.com/labstack/echo/v4"
 	"github.com/pkg/errors"
+	"gopkg.in/yaml.v2"
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/google/go-github/v32/github"
@@ -20,26 +22,51 @@ var (
 	candidateRx, changelogRx, emptyRx *regexp.Regexp
 )
 
-type Client interface {
-	HandlePushEvent(*github.PushEvent, Config) (interface{}, error)
-	HandleReleaseEvent(*github.ReleaseEvent, Config) (interface{}, error)
-	GetFile(repo Repo, ref, file string) (io.ReadCloser, error)
-	GetLatestTag(repo Repo) (*semver.Version, error)
-	GetCommitRange(repo Repo, base, head string) (*github.CommitsComparison, error)
-	GetPullsInCommitRange(repo Repo, commits []*github.RepositoryCommit) ([]*github.PullRequest, error)
+var validate *validator.Validate = validator.New()
+
+type GithubClient interface {
+	// HandlePushEvent(*github.PushEvent, Config) (interface{}, error)
+	// HandleReleaseEvent(*github.ReleaseEvent, Config) (interface{}, error)
+	// GetFile(repo Repo, ref, file string) (io.ReadCloser, error)
+	// GetLatestTag(repo Repo) (*semver.Version, error)
+	// GetCommitRange(repo Repo, base, head string) (*github.CommitsComparison, error)
+	// GetPullsInCommitRange(repo Repo, commits []*github.RepositoryCommit) ([]*github.PullRequest, error)
 }
 
-type ClientImpl struct {
+type LabelsConfig struct {
+	Major string `yaml:"major,omitempty"`
+	Minor string `yaml:"minor,omitempty"`
+}
+
+type Strategy struct {
+	Type string `yaml:"type,omitempty" validate:"oneof=pre-release full-release"`
+}
+
+type Config struct {
+	TargetBranch string       `yaml:"targetBranch,omitempty" validate:"required"`
+	Labels       LabelsConfig `yaml:"labels,omitempty"`
+	Strategy     Strategy     `yaml:"strategy,omitempty"`
+}
+
+type Repo interface {
+	GetOwner() *github.User
+	GetName() string
+	GetDefaultBranch() string
+}
+
+type GithubClientImpl struct {
 	client *github.Client
 	log    echo.Logger
+	repo   Repo
 }
 
-func NewClient(tc *http.Client, log echo.Logger) *ClientImpl {
+func NewGithubClient(tc *http.Client, log echo.Logger, repo Repo) *GithubClientImpl {
 	cl := github.NewClient(tc)
 
-	return &ClientImpl{
+	return &GithubClientImpl{
 		client: cl,
 		log:    log,
+		repo:   repo,
 	}
 }
 
@@ -49,11 +76,38 @@ func init() {
 	candidateRx = regexp.MustCompile("^rc.(?P<candidate>[0-9]+)$")
 }
 
-func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent, config Config) (interface{}, error) {
-	owner := ev.GetRepo().GetOwner().GetLogin()
-	repo := ev.GetRepo().GetName()
-	pushed := strings.TrimPrefix(ev.GetRef(), "refs/heads/")
-	master := config.TargetBranch
+func (c *GithubClientImpl) getConfig(ref string) (*Config, error) {
+	config := &Config{
+		TargetBranch: c.repo.GetDefaultBranch(),
+		Labels: LabelsConfig{
+			Major: "major",
+			Minor: "minor",
+		},
+		Strategy: Strategy{
+			Type: "pre-release",
+		},
+	}
+	reader, err := c.GetFile(ref, ".ship-it")
+	if err != nil {
+		c.log.Debug("Error getting config from github, using defaults ", err)
+		return config, nil
+	}
+	defer reader.Close()
+	decoder := yaml.NewDecoder(reader)
+	if err := decoder.Decode(config); err != nil {
+		return nil, errors.Wrap(err, "Error decoding config file")
+	}
+	if err := validate.Struct(config); err != nil {
+		return nil, errors.Wrap(err, "Could not validate configuration")
+	}
+	return config, nil
+}
+
+func (c *GithubClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) {
+	// pushed := strings.TrimPrefix(ev.GetRef(), "refs/heads/")
+	// master := config.TargetBranch
+
+	c.getConfig(ev.GetRef())
 
 	if pushed != master {
 		return nil, nil
@@ -68,7 +122,7 @@ func (c *ClientImpl) HandlePushEvent(ev *github.PushEvent, config Config) (inter
 	return c.ReleaseCandidate(owner, repo, release.GetTagName(), master, config)
 }
 
-func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent, config Config) (interface{}, error) {
+func (c *GithubClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent, config Config) (interface{}, error) {
 	owner := ev.GetRepo().GetOwner().GetLogin()
 	repo := ev.GetRepo().GetName()
 	release := ev.GetRelease()
@@ -101,7 +155,7 @@ func (c *ClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent, config Config) 
 	return nil, nil
 }
 
-func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
+func (c *GithubClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
 	owner := ev.GetRepo().GetOwner().GetLogin()
 	repo := ev.GetRepo().GetName()
 
@@ -144,7 +198,7 @@ func (c *ClientImpl) Promote(ev *github.ReleaseEvent) (interface{}, error) {
 	return nil, nil
 }
 
-func (c *ClientImpl) LabelPRs(owner, repo string, next *semver.Version) (interface{}, error) {
+func (c *GithubClientImpl) LabelPRs(owner, repo string, next *semver.Version) (interface{}, error) {
 	last, err := c.FindLast(owner, repo, next)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Could not find latest release candidate of v%s", next)
@@ -176,7 +230,7 @@ func (c *ClientImpl) LabelPRs(owner, repo string, next *semver.Version) (interfa
 	return nil, nil
 }
 
-func (c *ClientImpl) FindLast(owner, repo string, next *semver.Version) (*semver.Version, error) {
+func (c *GithubClientImpl) FindLast(owner, repo string, next *semver.Version) (*semver.Version, error) {
 	constraint, err := semver.NewConstraint(fmt.Sprintf("<%v", next.String()))
 	if err != nil {
 		return nil, err
@@ -200,7 +254,7 @@ func (c *ClientImpl) FindLast(owner, repo string, next *semver.Version) (*semver
 	return top, nil
 }
 
-func (c *ClientImpl) Cleanup(ev *github.ReleaseEvent) (interface{}, error) {
+func (c *GithubClientImpl) Cleanup(ev *github.ReleaseEvent) (interface{}, error) {
 	owner := ev.GetRepo().GetOwner().GetLogin()
 	repo := ev.GetRepo().GetName()
 
@@ -234,7 +288,7 @@ func (c *ClientImpl) Cleanup(ev *github.ReleaseEvent) (interface{}, error) {
 	return nil, nil
 }
 
-func (c *ClientImpl) ReleaseCandidate(owner, repo, latest, target string, config Config) (interface{}, error) {
+func (c *GithubClientImpl) ReleaseCandidate(owner, repo, latest, target string, config Config) (interface{}, error) {
 	pulls, err := c.getPulls(owner, repo, latest, target)
 	if err != nil {
 		c.log.Warn("Error while examining pull requests", err)
@@ -245,7 +299,7 @@ func (c *ClientImpl) ReleaseCandidate(owner, repo, latest, target string, config
 	}
 	c.log.Debugf("Gathered changelog from %d pull requests", len(pulls))
 
-	nextTag, err := c.NextTag(owner, repo, latest, pulls, config)
+	nextTag, err := c.NextTag(latest, pulls, config)
 	if err != nil {
 		return nil, errors.Wrap(err, "Could not calculate next tag")
 	}
@@ -264,7 +318,7 @@ func (c *ClientImpl) ReleaseCandidate(owner, repo, latest, target string, config
 	return nextTag, nil
 }
 
-func (c *ClientImpl) CollectChangelog(pulls map[int]*github.PullRequest) (string, error) {
+func (c *GithubClientImpl) CollectChangelog(pulls map[int]*github.PullRequest) (string, error) {
 	logentries := []string{}
 	for _, pull := range pulls {
 		matches := changelogRx.FindStringSubmatch(pull.GetBody())
@@ -279,7 +333,7 @@ func (c *ClientImpl) CollectChangelog(pulls map[int]*github.PullRequest) (string
 	return fmt.Sprintf("Changes:\n\n%s", strings.Join(logentries, "\n")), nil
 }
 
-func (c *ClientImpl) NextTag(owner, repo, latest string, pulls map[int]*github.PullRequest, config Config) (string, error) {
+func (c *GithubClientImpl) NextTag(latest string, pulls map[int]*github.PullRequest, config Config) (string, error) {
 	v, err := semver.NewVersion(latest)
 	if err != nil {
 		return "", err
@@ -299,7 +353,7 @@ out:
 		}
 	}
 
-	refs, err := c.getRefs(owner, repo, fmt.Sprintf("tags/v%v-rc.", nextVersion))
+	refs, err := c.getRefs(fmt.Sprintf("tags/v%v-rc.", nextVersion))
 	if err != nil {
 		return "", err
 	}
@@ -318,7 +372,7 @@ out:
 	return fmt.Sprintf("v%v-rc.%d", nextVersion, rc), nil
 }
 
-// func (c *ClientImpl) getPulls(repo Repo, latest, current string) (map[int]*github.PullRequest, error) {
+// func (c *GithubClientImpl) getPulls(repo Repo, latest, current string) (map[int]*github.PullRequest, error) {
 // 	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName(), latest, current)
 // 	if err != nil {
 // 		return nil, err
@@ -347,22 +401,22 @@ out:
 // 	return pulls, nil
 // }
 
-func (c *ClientImpl) GetCommitRange(repo Repo, base, head string) (*github.CommitsComparison, error) {
-	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName(), base, head)
+func (c *GithubClientImpl) GetCommitRange(base, head string) (*github.CommitsComparison, error) {
+	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), c.owner, c.repo, base, head)
 	if err != nil {
 		return nil, err
 	}
 	return comparison, nil
 }
 
-func (c *ClientImpl) GetPullsInCommitRange(repo Repo, commits []*github.RepositoryCommit) ([]*github.PullRequest, error) {
+func (c *GithubClientImpl) GetPullsInCommitRange(commits []*github.RepositoryCommit) ([]*github.PullRequest, error) {
 	max := 100
 	if len(commits) < 100 {
 		max = len(commits)
 	}
 	pulls := []*github.PullRequest{}
 	for _, commit := range commits[:max] {
-		prs, err := c.paginatePullsWithCommit(repo, commit.GetSHA(), &github.PullRequestListOptions{})
+		prs, err := c.paginatePullsWithCommit(commit.GetSHA(), &github.PullRequestListOptions{})
 		if err != nil {
 			return nil, errors.Wrap(err, "Could not paginate pull requests")
 		}
@@ -371,11 +425,11 @@ func (c *ClientImpl) GetPullsInCommitRange(repo Repo, commits []*github.Reposito
 	return pulls, nil
 }
 
-func (c *ClientImpl) paginatePullsWithCommit(repo Repo, sha string, opts *github.PullRequestListOptions) ([]*github.PullRequest, error) {
+func (c *GithubClientImpl) paginatePullsWithCommit(sha string, opts *github.PullRequestListOptions) ([]*github.PullRequest, error) {
 	page := 0
 	pulls := []*github.PullRequest{}
 	for {
-		prs, out, err := c.client.PullRequests.ListPullRequestsWithCommit(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName(), sha, &github.PullRequestListOptions{
+		prs, out, err := c.client.PullRequests.ListPullRequestsWithCommit(context.TODO(), c.owner, c.repo, sha, &github.PullRequestListOptions{
 			State:     opts.State,
 			Head:      opts.Head,
 			Base:      opts.Base,
@@ -397,11 +451,11 @@ func (c *ClientImpl) paginatePullsWithCommit(repo Repo, sha string, opts *github
 	return pulls, nil
 }
 
-func (c *ClientImpl) paginateRefs(repo Repo, opts *github.ReferenceListOptions) ([]*github.Reference, error) {
+func (c *GithubClientImpl) paginateRefs(opts *github.ReferenceListOptions) ([]*github.Reference, error) {
 	page := 0
 	references := []*github.Reference{}
 	for {
-		refs, out, err := c.client.Git.ListMatchingRefs(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName(), &github.ReferenceListOptions{
+		refs, out, err := c.client.Git.ListMatchingRefs(context.TODO(), c.owner, c.repo, &github.ReferenceListOptions{
 			Ref: opts.Ref,
 			ListOptions: github.ListOptions{
 				Page: page,
@@ -419,14 +473,14 @@ func (c *ClientImpl) paginateRefs(repo Repo, opts *github.ReferenceListOptions) 
 	return references, nil
 }
 
-func (c *ClientImpl) GetFile(repo Repo, ref, file string) (io.ReadCloser, error) {
-	return c.client.Repositories.DownloadContents(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName(), file, &github.RepositoryContentGetOptions{
+func (c *GithubClientImpl) GetFile(ref, file string) (io.ReadCloser, error) {
+	return c.client.Repositories.DownloadContents(context.TODO(), c.Repo.owner, c.repo, file, &github.RepositoryContentGetOptions{
 		Ref: ref,
 	})
 }
 
-func (c *ClientImpl) GetLatestTag(repo Repo) (*semver.Version, error) {
-	release, _, err := c.client.Repositories.GetLatestRelease(context.TODO(), repo.GetOwner().GetLogin(), repo.GetName())
+func (c *GithubClientImpl) GetLatestTag() (*semver.Version, error) {
+	release, _, err := c.client.Repositories.GetLatestRelease(context.TODO(), c.owner, c.repo)
 	if err != nil {
 		return nil, errors.Wrap(err, "Could not get latest release")
 	}
