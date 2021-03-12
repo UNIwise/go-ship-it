@@ -9,10 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-playground/validator"
 	"github.com/labstack/echo/v4"
 	"github.com/pkg/errors"
-	"gopkg.in/yaml.v2"
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/google/go-github/v32/github"
@@ -22,7 +20,7 @@ var (
 	candidateRx, changelogRx, emptyRx *regexp.Regexp
 )
 
-var validate *validator.Validate = validator.New()
+// var validate *validator.Validate = validator.New()
 
 type GithubClient interface {
 	// HandlePushEvent(*github.PushEvent, Config) (interface{}, error)
@@ -31,21 +29,6 @@ type GithubClient interface {
 	// GetLatestTag(repo Repo) (*semver.Version, error)
 	// GetCommitRange(repo Repo, base, head string) (*github.CommitsComparison, error)
 	// GetPullsInCommitRange(repo Repo, commits []*github.RepositoryCommit) ([]*github.PullRequest, error)
-}
-
-type LabelsConfig struct {
-	Major string `yaml:"major,omitempty"`
-	Minor string `yaml:"minor,omitempty"`
-}
-
-type Strategy struct {
-	Type string `yaml:"type,omitempty" validate:"oneof=pre-release full-release"`
-}
-
-type Config struct {
-	TargetBranch string       `yaml:"targetBranch,omitempty" validate:"required"`
-	Labels       LabelsConfig `yaml:"labels,omitempty"`
-	Strategy     Strategy     `yaml:"strategy,omitempty"`
 }
 
 type Repo interface {
@@ -76,55 +59,28 @@ func init() {
 	candidateRx = regexp.MustCompile("^rc.(?P<candidate>[0-9]+)$")
 }
 
-func (c *GithubClientImpl) getConfig(ref string) (*Config, error) {
-	config := &Config{
-		TargetBranch: c.repo.GetDefaultBranch(),
-		Labels: LabelsConfig{
-			Major: "major",
-			Minor: "minor",
-		},
-		Strategy: Strategy{
-			Type: "pre-release",
-		},
-	}
-	reader, err := c.GetFile(ref, ".ship-it")
-	if err != nil {
-		c.log.Debug("Error getting config from github, using defaults ", err)
-		return config, nil
-	}
-	defer reader.Close()
-	decoder := yaml.NewDecoder(reader)
-	if err := decoder.Decode(config); err != nil {
-		return nil, errors.Wrap(err, "Error decoding config file")
-	}
-	if err := validate.Struct(config); err != nil {
-		return nil, errors.Wrap(err, "Could not validate configuration")
-	}
-	return config, nil
-}
-
 func (c *GithubClientImpl) HandlePushEvent(ev *github.PushEvent) (interface{}, error) {
-	// pushed := strings.TrimPrefix(ev.GetRef(), "refs/heads/")
-	// master := config.TargetBranch
+	strategy, err := c.getConfig(ev.GetHead())
+	if err != nil {
+		return nil, errors.Wrap(err, "Could not load repository config")
+	}
 
-	c.getConfig(ev.GetRef())
-
-	if pushed != master {
+	if !strategy.Match(ev.GetRef()) {
 		return nil, nil
 	}
-	c.log.Infof("%v pushed. Scheduling release", master)
 
-	release, _, err := c.client.Repositories.GetLatestRelease(context.TODO(), owner, repo)
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to get latest release")
-	}
-
-	return c.ReleaseCandidate(owner, repo, release.GetTagName(), master, config)
+	c.log.Infof("%v pushed. Scheduling release", ev.GetRef())
+	return strategy.Release(c, ev.GetHead())
 }
 
-func (c *GithubClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent, config Config) (interface{}, error) {
-	owner := ev.GetRepo().GetOwner().GetLogin()
-	repo := ev.GetRepo().GetName()
+func (c *GithubClientImpl) HandleReleaseEvent(ev *github.ReleaseEvent) (interface{}, error) {
+	// owner := ev.GetRepo().GetOwner().GetLogin()
+	// repo := ev.GetRepo().GetName()
+	strategy, err := c.getConfig(ev.GetRelease().GetTagName())
+	if err != nil {
+		return nil, errors.Wrap(err, "Could not load repository config")
+	}
+
 	release := ev.GetRelease()
 	if release.GetPrerelease() {
 		return nil, nil
@@ -402,7 +358,7 @@ out:
 // }
 
 func (c *GithubClientImpl) GetCommitRange(base, head string) (*github.CommitsComparison, error) {
-	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), c.owner, c.repo, base, head)
+	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), base, head)
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +385,7 @@ func (c *GithubClientImpl) paginatePullsWithCommit(sha string, opts *github.Pull
 	page := 0
 	pulls := []*github.PullRequest{}
 	for {
-		prs, out, err := c.client.PullRequests.ListPullRequestsWithCommit(context.TODO(), c.owner, c.repo, sha, &github.PullRequestListOptions{
+		prs, out, err := c.client.PullRequests.ListPullRequestsWithCommit(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), sha, &github.PullRequestListOptions{
 			State:     opts.State,
 			Head:      opts.Head,
 			Base:      opts.Base,
@@ -455,10 +411,11 @@ func (c *GithubClientImpl) paginateRefs(opts *github.ReferenceListOptions) ([]*g
 	page := 0
 	references := []*github.Reference{}
 	for {
-		refs, out, err := c.client.Git.ListMatchingRefs(context.TODO(), c.owner, c.repo, &github.ReferenceListOptions{
+		refs, out, err := c.client.Git.ListMatchingRefs(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), &github.ReferenceListOptions{
 			Ref: opts.Ref,
 			ListOptions: github.ListOptions{
-				Page: page,
+				Page:    page,
+				PerPage: opts.PerPage,
 			},
 		})
 		if err != nil {
@@ -474,13 +431,13 @@ func (c *GithubClientImpl) paginateRefs(opts *github.ReferenceListOptions) ([]*g
 }
 
 func (c *GithubClientImpl) GetFile(ref, file string) (io.ReadCloser, error) {
-	return c.client.Repositories.DownloadContents(context.TODO(), c.Repo.owner, c.repo, file, &github.RepositoryContentGetOptions{
+	return c.client.Repositories.DownloadContents(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), file, &github.RepositoryContentGetOptions{
 		Ref: ref,
 	})
 }
 
 func (c *GithubClientImpl) GetLatestTag() (*semver.Version, error) {
-	release, _, err := c.client.Repositories.GetLatestRelease(context.TODO(), c.owner, c.repo)
+	release, _, err := c.client.Repositories.GetLatestRelease(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName())
 	if err != nil {
 		return nil, errors.Wrap(err, "Could not get latest release")
 	}

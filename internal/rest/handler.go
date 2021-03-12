@@ -51,11 +51,11 @@ func (h *WebhookHandler) HandleGithub(c echo.Context) error {
 	switch event := event.(type) {
 	case *github.PushEvent:
 		client := h.initGithubClient(c, event, event.GetRepo())
-
-		// go handlePushEvent(logger, client, event)
+		go client.HandlePushEvent(event)
 		return c.String(http.StatusAccepted, "Handling push event")
 	case *github.ReleaseEvent:
 		client := h.initGithubClient(c, event, event.GetRepo())
+		go client.HandleReleaseEvent(event)
 
 		// go client.HandleReleaseEvent()
 		// go handleReleaseEvent(logger, client, event)
