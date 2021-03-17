@@ -16,7 +16,7 @@ limitations under the License.
 package cmd
 
 import (
-	"github.com/labstack/gommon/log"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/uniwise/go-ship-it/internal/rest"
@@ -28,19 +28,23 @@ var serveCmd = &cobra.Command{
 	Short: "Start the server",
 	Long:  `Start the go-ship-it server`,
 	Run: func(cmd *cobra.Command, args []string) {
-		lvl := log.INFO
-		switch viper.GetString("server.loglevel") {
-		case "debug":
-			lvl = log.DEBUG
-		case "warn":
-			lvl = log.WARN
-		case "error":
-			lvl = log.ERROR
-		case "off":
-			lvl = log.OFF
-		case "info":
+		logger := logrus.New()
+
+		lvl, err := logrus.ParseLevel(viper.GetString("server.loglevel"))
+		if err != nil {
+			logger.Fatal(err)
+		}
+		logger.SetLevel(lvl)
+
+		switch viper.GetString("server.logformat") {
 		default:
-			lvl = log.INFO
+			logger.Warnf("Could not understand log format '%s'. Defaulting to text", viper.GetString("server.logformat"))
+
+			fallthrough
+		case "text":
+			logger.SetFormatter(&logrus.TextFormatter{})
+		case "json":
+			logger.SetFormatter(&logrus.JSONFormatter{})
 		}
 
 		s := &rest.ServerImpl{
@@ -48,12 +52,11 @@ var serveCmd = &cobra.Command{
 			PrivateKeyFile: viper.GetString("github.keyfile"),
 			GithubSecret:   []byte(viper.GetString("github.secret")),
 			Port:           viper.GetInt32("server.port"),
-			LogLevel:       lvl,
+			Logger:         logrus.NewEntry(logger),
 		}
 
-		err := s.Serve()
-		if err != nil {
-			log.Fatal(err)
+		if err := s.Serve(); err != nil {
+			logger.Fatal(err)
 		}
 	},
 }
