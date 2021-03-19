@@ -9,10 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/sirupsen/logrus"
 	"github.com/uniwise/go-ship-it/internal/scm"
-	"gopkg.in/go-playground/validator.v9"
 )
-
-var validate *validator.Validate = validator.New()
 
 type WebhookHandler struct {
 	Secret        []byte
@@ -77,7 +74,7 @@ func (h *WebhookHandler) HandleGithub(c echo.Context) error {
 	case *github.PingEvent:
 		return c.String(http.StatusOK, "pong")
 	default:
-		entry.WithField("event", ).Warn("Unexpected event")
+		entry.Warn("Unexpected event")
 
 		return c.String(http.StatusNotAcceptable, "Unexpected event")
 	}
