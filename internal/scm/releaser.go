@@ -174,7 +174,7 @@ func (r *Releaser) HandleRelease(e *github.ReleaseEvent) {
 		r.log.Info("Adding pull requests to milestone")
 		current, err := semver.NewVersion(n.GetTagName())
 		if err != nil {
-			r.log.WithError(err).Error("Failed to parse tag '%s' as version", n.GetTagName())
+			r.log.WithError(err).Errorf("Failed to parse tag '%s' as version", n.GetTagName())
 			return
 		}
 		r.log.Debugf("Finding previous release based on '%s'", current.String())
