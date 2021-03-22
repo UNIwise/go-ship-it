@@ -37,14 +37,13 @@ var serveCmd = &cobra.Command{
 		logger.SetLevel(lvl)
 
 		switch viper.GetString("server.logformat") {
-		default:
-			logger.Warnf("Could not understand log format '%s'. Defaulting to text", viper.GetString("server.logformat"))
-
-			fallthrough
 		case "text":
 			logger.SetFormatter(&logrus.TextFormatter{})
 		case "json":
 			logger.SetFormatter(&logrus.JSONFormatter{})
+		default:
+			logger.Warnf("Could not understand log format '%s'. Defaulting to text", viper.GetString("server.logformat"))
+			logger.SetFormatter(&logrus.TextFormatter{})
 		}
 
 		s := &rest.ServerImpl{
