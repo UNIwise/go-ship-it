@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -33,7 +34,7 @@ func (h *WebhookHandler) initReleaser(c echo.Context, ev HandledGithubEvent, rep
 	k := ghinstallation.NewFromAppsTransport(h.AppsTransport, ev.GetInstallation().GetID())
 	client := scm.NewGithubClient(&http.Client{Transport: k, Timeout: time.Minute}, repo)
 
-	return scm.NewReleaser(client, ref, entry.WithField("repo", repo.GetFullName()))
+	return scm.NewReleaser(c.Request().Context(), client, ref, entry.WithField("repo", repo.GetFullName()))
 }
 
 func (h *WebhookHandler) HandleGithub(c echo.Context) error {
@@ -58,7 +59,7 @@ func (h *WebhookHandler) HandleGithub(c echo.Context) error {
 
 			return err
 		}
-		go r.HandlePush(event)
+		go r.HandlePush(context.Background(), event)
 
 		return c.String(http.StatusAccepted, "Handling push event")
 	case *github.ReleaseEvent:
@@ -68,7 +69,7 @@ func (h *WebhookHandler) HandleGithub(c echo.Context) error {
 
 			return err
 		}
-		go r.HandleRelease(event)
+		go r.HandleRelease(context.Background(), event)
 
 		return c.String(http.StatusAccepted, "Handling release event")
 	case *github.PingEvent:

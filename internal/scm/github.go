@@ -6,28 +6,27 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/pkg/errors"
-
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/google/go-github/v33/github"
+	"github.com/pkg/errors"
 )
 
 type GithubClient interface {
-	CreateMilestone(title string) (*github.Milestone, error)
-	AddPRtoMilestone(pull *github.PullRequest, milestone *github.Milestone) error
-	GetReleaseByTag(tag string) (*github.RepositoryRelease, error)
-	DeleteRelease(r *github.RepositoryRelease) error
-	DeleteTag(tag string) error
-	EditRelease(id int64, release *github.RepositoryRelease) (*github.RepositoryRelease, error)
-	GetRef(r string) (*github.Reference, error)
-	CreateRef(r *github.Reference) error
-	CreateRelease(r *github.RepositoryRelease) error
-	GetRefs(pattern string) ([]*github.Reference, error)
-	GetCommitRange(base, head string) (*github.CommitsComparison, error)
-	GetPullsInCommitRange(commits []*github.RepositoryCommit) ([]*github.PullRequest, error)
-	GetLatestTag() (tag string, ver *semver.Version, err error)
+	CreateMilestone(ctx context.Context, title string) (*github.Milestone, error)
+	AddPRtoMilestone(ctx context.Context, pull *github.PullRequest, milestone *github.Milestone) error
+	GetReleaseByTag(ctx context.Context, tag string) (*github.RepositoryRelease, error)
+	DeleteRelease(ctx context.Context, r *github.RepositoryRelease) error
+	DeleteTag(ctx context.Context, tag string) error
+	EditRelease(ctx context.Context, id int64, release *github.RepositoryRelease) (*github.RepositoryRelease, error)
+	GetRef(ctx context.Context, r string) (*github.Reference, error)
+	CreateRef(ctx context.Context, r *github.Reference) error
+	CreateRelease(ctx context.Context, r *github.RepositoryRelease) error
+	GetRefs(ctx context.Context, pattern string) ([]*github.Reference, error)
+	GetCommitRange(ctx context.Context, base, head string) (*github.CommitsComparison, error)
+	GetPullsInCommitRange(ctx context.Context, commits []*github.RepositoryCommit) ([]*github.PullRequest, error)
+	GetLatestTag(ctx context.Context) (tag string, ver *semver.Version, err error)
+	GetFile(ctx context.Context, ref, file string) (io.ReadCloser, error)
 	GetRepo() Repo
-	GetFile(ref, file string) (io.ReadCloser, error)
 }
 
 type Repo interface {
@@ -51,8 +50,8 @@ func NewGithubClient(tc *http.Client, repo Repo) *GithubClientImpl {
 	}
 }
 
-func (c *GithubClientImpl) CreateMilestone(title string) (*github.Milestone, error) {
-	milestone, _, err := c.client.Issues.CreateMilestone(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), &github.Milestone{
+func (c *GithubClientImpl) CreateMilestone(ctx context.Context, title string) (*github.Milestone, error) {
+	milestone, _, err := c.client.Issues.CreateMilestone(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), &github.Milestone{
 		Title: github.String(title),
 		State: github.String("closed"),
 	})
@@ -62,8 +61,8 @@ func (c *GithubClientImpl) CreateMilestone(title string) (*github.Milestone, err
 	return milestone, nil
 }
 
-func (c *GithubClientImpl) AddPRtoMilestone(pull *github.PullRequest, milestone *github.Milestone) error {
-	_, _, err := c.client.Issues.Edit(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), pull.GetNumber(), &github.IssueRequest{
+func (c *GithubClientImpl) AddPRtoMilestone(ctx context.Context, pull *github.PullRequest, milestone *github.Milestone) error {
+	_, _, err := c.client.Issues.Edit(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), pull.GetNumber(), &github.IssueRequest{
 		Milestone: milestone.Number,
 	})
 	if err != nil {
@@ -72,63 +71,63 @@ func (c *GithubClientImpl) AddPRtoMilestone(pull *github.PullRequest, milestone 
 	return nil
 }
 
-func (c *GithubClientImpl) GetReleaseByTag(tag string) (*github.RepositoryRelease, error) {
-	release, _, err := c.client.Repositories.GetReleaseByTag(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), tag)
+func (c *GithubClientImpl) GetReleaseByTag(ctx context.Context, tag string) (*github.RepositoryRelease, error) {
+	release, _, err := c.client.Repositories.GetReleaseByTag(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), tag)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Failed to find release from tag '%s'", tag)
 	}
 	return release, nil
 }
 
-func (c *GithubClientImpl) DeleteRelease(release *github.RepositoryRelease) error {
-	_, err := c.client.Repositories.DeleteRelease(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), release.GetID())
+func (c *GithubClientImpl) DeleteRelease(ctx context.Context, release *github.RepositoryRelease) error {
+	_, err := c.client.Repositories.DeleteRelease(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), release.GetID())
 	if err != nil {
 		return errors.Wrapf(err, "Failed to delete release '%d'", release.GetID())
 	}
 	return nil
 }
 
-func (c *GithubClientImpl) DeleteTag(tag string) error {
-	_, err := c.client.Git.DeleteRef(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), fmt.Sprintf("refs/tags/%s", tag))
+func (c *GithubClientImpl) DeleteTag(ctx context.Context, tag string) error {
+	_, err := c.client.Git.DeleteRef(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), fmt.Sprintf("refs/tags/%s", tag))
 	if err != nil {
 		return errors.Wrapf(err, "Failed to delete tag '%s'", tag)
 	}
 	return nil
 }
 
-func (c *GithubClientImpl) EditRelease(id int64, release *github.RepositoryRelease) (*github.RepositoryRelease, error) {
-	r, _, err := c.client.Repositories.EditRelease(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), id, release)
+func (c *GithubClientImpl) EditRelease(ctx context.Context, id int64, release *github.RepositoryRelease) (*github.RepositoryRelease, error) {
+	r, _, err := c.client.Repositories.EditRelease(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), id, release)
 	return r, err
 }
 
-func (c *GithubClientImpl) GetRef(r string) (*github.Reference, error) {
-	ref, _, err := c.client.Git.GetRef(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), r)
+func (c *GithubClientImpl) GetRef(ctx context.Context, r string) (*github.Reference, error) {
+	ref, _, err := c.client.Git.GetRef(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), r)
 	return ref, err
 }
 
-func (c *GithubClientImpl) CreateRef(r *github.Reference) error {
-	_, _, err := c.client.Git.CreateRef(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), r)
+func (c *GithubClientImpl) CreateRef(ctx context.Context, r *github.Reference) error {
+	_, _, err := c.client.Git.CreateRef(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), r)
 	return err
 }
 
-func (c *GithubClientImpl) CreateRelease(r *github.RepositoryRelease) error {
-	_, _, err := c.client.Repositories.CreateRelease(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), r)
+func (c *GithubClientImpl) CreateRelease(ctx context.Context, r *github.RepositoryRelease) error {
+	_, _, err := c.client.Repositories.CreateRelease(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), r)
 	return err
 }
 
-func (c *GithubClientImpl) GetRefs(pattern string) ([]*github.Reference, error) {
-	return c.paginateRefs(&github.ReferenceListOptions{Ref: pattern, ListOptions: github.ListOptions{PerPage: 25}})
+func (c *GithubClientImpl) GetRefs(ctx context.Context, pattern string) ([]*github.Reference, error) {
+	return c.paginateRefs(ctx, &github.ReferenceListOptions{Ref: pattern, ListOptions: github.ListOptions{PerPage: 25}})
 }
 
-func (c *GithubClientImpl) GetCommitRange(base, head string) (*github.CommitsComparison, error) {
-	comparison, _, err := c.client.Repositories.CompareCommits(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), base, head)
+func (c *GithubClientImpl) GetCommitRange(ctx context.Context, base, head string) (*github.CommitsComparison, error) {
+	comparison, _, err := c.client.Repositories.CompareCommits(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), base, head)
 	if err != nil {
 		return nil, err
 	}
 	return comparison, nil
 }
 
-func (c *GithubClientImpl) GetPullsInCommitRange(commits []*github.RepositoryCommit) ([]*github.PullRequest, error) {
+func (c *GithubClientImpl) GetPullsInCommitRange(ctx context.Context, commits []*github.RepositoryCommit) ([]*github.PullRequest, error) {
 	max := 100
 	if len(commits) < max {
 		max = len(commits)
@@ -136,7 +135,7 @@ func (c *GithubClientImpl) GetPullsInCommitRange(commits []*github.RepositoryCom
 	unique := map[int]interface{}{}
 	pulls := []*github.PullRequest{}
 	for _, commit := range commits[:max] {
-		prs, err := c.paginatePullsWithCommit(commit.GetSHA(), &github.PullRequestListOptions{})
+		prs, err := c.paginatePullsWithCommit(ctx, commit.GetSHA(), &github.PullRequestListOptions{})
 		if err != nil {
 			return nil, errors.Wrap(err, "Failed to paginate pull requests")
 		}
@@ -151,8 +150,8 @@ func (c *GithubClientImpl) GetPullsInCommitRange(commits []*github.RepositoryCom
 	return pulls, nil
 }
 
-func (c *GithubClientImpl) GetFile(ref, file string) (io.ReadCloser, error) {
-	r, _, err := c.client.Repositories.DownloadContents(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), file, &github.RepositoryContentGetOptions{
+func (c *GithubClientImpl) GetFile(ctx context.Context, ref, file string) (io.ReadCloser, error) {
+	r, _, err := c.client.Repositories.DownloadContents(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), file, &github.RepositoryContentGetOptions{
 		Ref: ref,
 	})
 	return r, err
@@ -162,8 +161,8 @@ func (c *GithubClientImpl) GetRepo() Repo {
 	return c.repo
 }
 
-func (c *GithubClientImpl) GetLatestTag() (tag string, ver *semver.Version, err error) {
-	release, _, err := c.client.Repositories.GetLatestRelease(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName())
+func (c *GithubClientImpl) GetLatestTag(ctx context.Context) (tag string, ver *semver.Version, err error) {
+	release, _, err := c.client.Repositories.GetLatestRelease(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName())
 	if err != nil {
 		return "", nil, errors.Wrap(err, "Failed to get latest release")
 	}
@@ -174,11 +173,11 @@ func (c *GithubClientImpl) GetLatestTag() (tag string, ver *semver.Version, err 
 	return release.GetTagName(), version, nil
 }
 
-func (c *GithubClientImpl) paginatePullsWithCommit(sha string, opts *github.PullRequestListOptions) ([]*github.PullRequest, error) {
+func (c *GithubClientImpl) paginatePullsWithCommit(ctx context.Context, sha string, opts *github.PullRequestListOptions) ([]*github.PullRequest, error) {
 	page := 0
 	pulls := []*github.PullRequest{}
 	for {
-		prs, out, err := c.client.PullRequests.ListPullRequestsWithCommit(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), sha, &github.PullRequestListOptions{
+		prs, out, err := c.client.PullRequests.ListPullRequestsWithCommit(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), sha, &github.PullRequestListOptions{
 			State:     opts.State,
 			Head:      opts.Head,
 			Base:      opts.Base,
@@ -201,11 +200,11 @@ func (c *GithubClientImpl) paginatePullsWithCommit(sha string, opts *github.Pull
 	return pulls, nil
 }
 
-func (c *GithubClientImpl) paginateRefs(opts *github.ReferenceListOptions) ([]*github.Reference, error) {
+func (c *GithubClientImpl) paginateRefs(ctx context.Context, opts *github.ReferenceListOptions) ([]*github.Reference, error) {
 	page := 0
 	references := []*github.Reference{}
 	for {
-		refs, out, err := c.client.Git.ListMatchingRefs(context.TODO(), c.repo.GetOwner().GetLogin(), c.repo.GetName(), &github.ReferenceListOptions{
+		refs, out, err := c.client.Git.ListMatchingRefs(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), &github.ReferenceListOptions{
 			Ref: opts.Ref,
 			ListOptions: github.ListOptions{
 				Page:    page,

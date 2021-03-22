@@ -1,6 +1,7 @@
 package scm
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -41,7 +42,7 @@ type Config struct {
 	Strategy     StrategyConf `yaml:"strategy,omitempty"`
 }
 
-func getConfig(c GithubClient, ref string) (*Config, error) {
+func getConfig(ctx context.Context, c GithubClient, ref string) (*Config, error) {
 	config := &Config{
 		TargetBranch: c.GetRepo().GetDefaultBranch(),
 		Labels: LabelsConfig{
@@ -52,7 +53,7 @@ func getConfig(c GithubClient, ref string) (*Config, error) {
 			Type: "pre-release",
 		},
 	}
-	reader, err := c.GetFile(ref, ".ship-it")
+	reader, err := c.GetFile(ctx, ref, ".ship-it")
 	if err != nil {
 		return config, nil
 	}
@@ -67,8 +68,8 @@ func getConfig(c GithubClient, ref string) (*Config, error) {
 	return config, nil
 }
 
-func NewReleaser(client GithubClient, ref string, log *logrus.Entry) (*Releaser, error) {
-	config, err := getConfig(client, ref)
+func NewReleaser(ctx context.Context, client GithubClient, ref string, log *logrus.Entry) (*Releaser, error) {
+	config, err := getConfig(ctx, client, ref)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to configure releaser")
 	}
@@ -79,34 +80,34 @@ func NewReleaser(client GithubClient, ref string, log *logrus.Entry) (*Releaser,
 	}, nil
 }
 
-func (r *Releaser) HandlePush(e *github.PushEvent) {
+func (r *Releaser) HandlePush(ctx context.Context, e *github.PushEvent) {
 	if !r.Match(e.GetRef()) {
 		return
 	}
 
 	r.log.Infof("%s pushed. Releasing...", e.GetRef())
-	t, v, err := r.client.GetLatestTag()
+	t, v, err := r.client.GetLatestTag(ctx)
 	if err != nil {
 		r.log.WithError(err).Error("Failed to get latest release")
 		return
 	}
 
 	r.log.Debugf("Finding commits in range %s..%.7s", t, e.GetAfter())
-	comparison, err := r.client.GetCommitRange(t, e.GetAfter())
+	comparison, err := r.client.GetCommitRange(ctx, t, e.GetAfter())
 	if err != nil {
 		r.log.WithError(err).Error("Failed to get commit range")
 		return
 	}
 
 	r.log.Debugf("Finding PRs in %d commits", len(comparison.Commits))
-	pulls, err := r.client.GetPullsInCommitRange(comparison.Commits)
+	pulls, err := r.client.GetPullsInCommitRange(ctx, comparison.Commits)
 	if err != nil {
 		r.log.WithError(err).Error("Failed to get pull requests in commit range")
 		return
 	}
 
 	r.log.Debugf("Finding next version based on %d PRs", len(pulls))
-	next, err := r.Increment(v, pulls)
+	next, err := r.Increment(ctx, v, pulls)
 	if err != nil {
 		r.log.WithError(err).Error("Failed to increment version")
 		return
@@ -121,7 +122,7 @@ func (r *Releaser) HandlePush(e *github.PushEvent) {
 	}
 
 	r.log.Debugf("Creating tag '%s' at '%.7s'", tagname, e.GetAfter())
-	err = r.client.CreateRef(&github.Reference{
+	err = r.client.CreateRef(ctx, &github.Reference{
 		Ref: github.String(fmt.Sprintf("refs/tags/%s", tagname)),
 		Object: &github.GitObject{
 			SHA: github.String(e.GetAfter()),
@@ -138,7 +139,7 @@ func (r *Releaser) HandlePush(e *github.PushEvent) {
 		"Commitish":  strings.TrimPrefix(e.GetRef(), "refs/heads/"),
 		"Prerelease": r.config.Strategy.Type == "pre-release",
 	}).Debugf("Creating release")
-	err = r.client.CreateRelease(&github.RepositoryRelease{
+	err = r.client.CreateRelease(ctx, &github.RepositoryRelease{
 		TagName:         github.String(tagname),
 		Name:            github.String(name),
 		TargetCommitish: github.String(strings.TrimPrefix(e.GetRef(), "refs/heads/")),
@@ -152,7 +153,7 @@ func (r *Releaser) HandlePush(e *github.PushEvent) {
 	r.log.Infof("Release %s created", tagname)
 }
 
-func (r *Releaser) HandleRelease(e *github.ReleaseEvent) {
+func (r *Releaser) HandleRelease(ctx context.Context, e *github.ReleaseEvent) {
 	if r.config.Strategy.Type == "full-release" {
 		return
 	}
@@ -164,7 +165,7 @@ func (r *Releaser) HandleRelease(e *github.ReleaseEvent) {
 	// Promotion action
 	if version.Prerelease() != "" && !e.GetRelease().GetPrerelease() {
 		r.log.Infof("Promoting release '%s'", e.GetRelease().GetTagName())
-		n, err := r.Promote(e.GetRelease())
+		n, err := r.Promote(ctx, e.GetRelease())
 		if err != nil {
 			r.log.WithError(err).Errorf("Failed to promote release '%d'", e.GetRelease().GetID())
 			return
@@ -178,28 +179,28 @@ func (r *Releaser) HandleRelease(e *github.ReleaseEvent) {
 			return
 		}
 		r.log.Debugf("Finding previous release based on '%s'", current.String())
-		previous, err := r.FindPreviousRelease(current)
+		previous, err := r.FindPreviousRelease(ctx, current)
 		if err != nil {
 			r.log.WithError(err).Errorf("Failed to find previous release based on '%s'", current.String())
 			return
 		}
 
 		r.log.Debugf("Finding commits in range %s..%s", previous.GetTagName(), n.GetTagName())
-		comparison, err := r.client.GetCommitRange(previous.GetTagName(), n.GetTagName())
+		comparison, err := r.client.GetCommitRange(ctx, previous.GetTagName(), n.GetTagName())
 		if err != nil {
 			r.log.WithError(err).Error("Failed to get commit range")
 			return
 		}
 
 		r.log.Debugf("Finding PRs in %d commits", len(comparison.Commits))
-		pulls, err := r.client.GetPullsInCommitRange(comparison.Commits)
+		pulls, err := r.client.GetPullsInCommitRange(ctx, comparison.Commits)
 		if err != nil {
 			r.log.WithError(err).Error("Failed to get pull requests in commit range")
 			return
 		}
 
 		r.log.Debugf("Creating milestone '%s'", n.GetName())
-		milestone, err := r.client.CreateMilestone(n.GetName())
+		milestone, err := r.client.CreateMilestone(ctx, n.GetName())
 		if err != nil {
 			r.log.WithError(err).Errorf("Failed to create milestone '%s'", milestone.GetTitle())
 			return
@@ -208,7 +209,7 @@ func (r *Releaser) HandleRelease(e *github.ReleaseEvent) {
 		r.log.Debugf("Adding %d pull requests to milestone '%s'", len(pulls), milestone.GetTitle())
 		failed := 0
 		for _, p := range pulls {
-			err := r.client.AddPRtoMilestone(p, milestone)
+			err := r.client.AddPRtoMilestone(ctx, p, milestone)
 			if err != nil {
 				r.log.WithError(err).Warnf("Failed to add PR '%d' to milestone '%d'", p.GetNumber(), milestone.GetNumber())
 				failed++
@@ -220,7 +221,7 @@ func (r *Releaser) HandleRelease(e *github.ReleaseEvent) {
 	// Cleanup action
 	if version.Prerelease() == "" && !e.GetRelease().GetPrerelease() {
 		r.log.Infof("Cleaning up candidates of '%s'", e.GetRelease().GetTagName())
-		number, err := r.CleanupCandidates(e.GetRelease())
+		number, err := r.CleanupCandidates(ctx, e.GetRelease())
 		if err != nil {
 			r.log.WithError(err).Errorf("Failed to clean up candidates for release '%d'", e.GetRelease().GetID())
 			return
@@ -230,7 +231,7 @@ func (r *Releaser) HandleRelease(e *github.ReleaseEvent) {
 	}
 }
 
-func (r *Releaser) FindPreviousRelease(version *semver.Version) (*github.RepositoryRelease, error) {
+func (r *Releaser) FindPreviousRelease(ctx context.Context, version *semver.Version) (*github.RepositoryRelease, error) {
 	constraint, err := semver.NewConstraint(fmt.Sprintf("<%s", version.String()))
 	if err != nil {
 		return nil, errors.Wrap(err, "Could not create semver constraint")
@@ -243,7 +244,7 @@ func (r *Releaser) FindPreviousRelease(version *semver.Version) (*github.Reposit
 		pattern = "v"
 	}
 
-	refs, err := r.client.GetRefs(fmt.Sprintf("tags/%s", pattern))
+	refs, err := r.client.GetRefs(ctx, fmt.Sprintf("tags/%s", pattern))
 	if err != nil {
 		return nil, errors.Wrapf(err, "Failed to list references with pattern 'tags/%s'", pattern)
 	}
@@ -261,10 +262,10 @@ func (r *Releaser) FindPreviousRelease(version *semver.Version) (*github.Reposit
 			top = v
 		}
 	}
-	return r.client.GetReleaseByTag(top.Original())
+	return r.client.GetReleaseByTag(ctx, top.Original())
 }
 
-func (r *Releaser) Promote(release *github.RepositoryRelease) (*github.RepositoryRelease, error) {
+func (r *Releaser) Promote(ctx context.Context, release *github.RepositoryRelease) (*github.RepositoryRelease, error) {
 	version, err := semver.NewVersion(release.GetTagName())
 	if err != nil {
 		return nil, errors.Wrapf(err, "Failed to parse tag '%s' as semantic version", release.GetTagName())
@@ -275,12 +276,12 @@ func (r *Releaser) Promote(release *github.RepositoryRelease) (*github.Repositor
 		return nil, errors.Wrapf(err, "Failed to unset prerelease for tag '%s'", release.GetTagName())
 	}
 
-	ref, err := r.client.GetRef(fmt.Sprintf("tags/%s", release.GetTagName()))
+	ref, err := r.client.GetRef(ctx, fmt.Sprintf("tags/%s", release.GetTagName()))
 	if err != nil {
 		return nil, errors.Wrapf(err, "Failed to get reference to tag '%s'", release.GetTagName())
 	}
 
-	err = r.client.CreateRef(&github.Reference{
+	err = r.client.CreateRef(ctx, &github.Reference{
 		Ref: github.String(fmt.Sprintf("tags/v%s", full.String())),
 		Object: &github.GitObject{
 			SHA: github.String(ref.GetObject().GetSHA()),
@@ -290,7 +291,7 @@ func (r *Releaser) Promote(release *github.RepositoryRelease) (*github.Repositor
 		return nil, errors.Wrapf(err, "Failed to create reference '%s'", full.String())
 	}
 
-	rel, err := r.client.EditRelease(release.GetID(), &github.RepositoryRelease{
+	rel, err := r.client.EditRelease(ctx, release.GetID(), &github.RepositoryRelease{
 		TagName: github.String(fmt.Sprintf("v%s", full.String())),
 		Name:    github.String(full.String()),
 	})
@@ -300,23 +301,23 @@ func (r *Releaser) Promote(release *github.RepositoryRelease) (*github.Repositor
 	return rel, nil
 }
 
-func (r *Releaser) CleanupCandidates(release *github.RepositoryRelease) (int, error) {
-	refs, err := r.client.GetRefs(fmt.Sprintf("tags/%s-rc.", release.GetTagName()))
+func (r *Releaser) CleanupCandidates(ctx context.Context, release *github.RepositoryRelease) (int, error) {
+	refs, err := r.client.GetRefs(ctx, fmt.Sprintf("tags/%s-rc.", release.GetTagName()))
 	if err != nil {
 		return 0, errors.Wrapf(err, "Failed to list refs for tag '%s'", release.GetTagName())
 	}
 
 	for _, ref := range refs {
 		tag := strings.TrimPrefix(ref.GetRef(), "refs/tags/")
-		if doomed, _ := r.client.GetReleaseByTag(tag); doomed != nil {
+		if doomed, _ := r.client.GetReleaseByTag(ctx, tag); doomed != nil {
 			if doomed.GetID() == release.GetID() || !doomed.GetPrerelease() {
 				continue
 			}
-			if err := r.client.DeleteRelease(doomed); err != nil {
+			if err := r.client.DeleteRelease(ctx, doomed); err != nil {
 				r.log.WithError(err).Warnf("Failed to delete release '%d'. Continuing...", doomed.GetID())
 			}
 		}
-		if err := r.client.DeleteTag(tag); err != nil {
+		if err := r.client.DeleteTag(ctx, tag); err != nil {
 			r.log.WithError(err).Warnf("Failed to delete tag '%s'. Continuing...", tag)
 		}
 	}
@@ -328,7 +329,7 @@ func (r *Releaser) Match(ref string) bool {
 	return strings.TrimPrefix(ref, "refs/heads/") == r.config.TargetBranch
 }
 
-func (r *Releaser) Increment(current *semver.Version, pulls []*github.PullRequest) (*semver.Version, error) {
+func (r *Releaser) Increment(ctx context.Context, current *semver.Version, pulls []*github.PullRequest) (*semver.Version, error) {
 	next := current.IncPatch()
 out:
 	for _, p := range pulls {
@@ -348,7 +349,7 @@ out:
 		return &next, nil
 	}
 
-	prereleases, err := r.client.GetRefs(fmt.Sprintf("tags/v%s-rc.", next.String()))
+	prereleases, err := r.client.GetRefs(ctx, fmt.Sprintf("tags/v%s-rc.", next.String()))
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to retrieve pre-releases")
 	}
