@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/google/go-github/v33/github"
+	"github.com/google/go-github/v35/github"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	validator "gopkg.in/go-playground/validator.v9"
