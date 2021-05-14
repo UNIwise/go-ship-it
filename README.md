@@ -39,6 +39,9 @@ Promotions can be triggered by editing a pre-release, and unchecking the pre-rel
 
 The behaviour can be configured with yaml in a `.ship-it` file at the root of the repository
 
-| key          | default | description                                                                                    |
-| ------------ | ------- | ---------------------------------------------------------------------------------------------- |
-| targetBranch | ""      | Specifies which branch to trigger new releases from. Leave empty for default repository branch |
+| key           | default         | description                                                                                    |
+| ------------- | --------------- | ---------------------------------------------------------------------------------------------- |
+| targetBranch  | `""`            | Specifies which branch to trigger new releases from. Leave empty for default repository branch |
+| labels.minor  | `"minor"`       | Specifies a label to look for when checking if next release should bump minor version          |
+| labels.major  | `"major"`       | Specifies a label to look for when checking if next release should bump major version          |
+| strategy.type | `"pre-release"` | specifies a type of strategy. Must be one of `"pre-release"` and `"full-release"`              |
