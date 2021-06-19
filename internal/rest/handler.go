@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/bradleyfalzon/ghinstallation"
-	"github.com/google/go-github/v33/github"
+	"github.com/google/go-github/v35/github"
 	"github.com/labstack/echo/v4"
 	"github.com/sirupsen/logrus"
 	"github.com/uniwise/go-ship-it/internal/scm"
