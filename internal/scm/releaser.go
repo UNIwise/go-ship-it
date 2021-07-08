@@ -55,7 +55,7 @@ func getConfig(ctx context.Context, c GithubClient, ref string) (*Config, error)
 	}
 	reader, err := c.GetFile(ctx, ref, ".ship-it")
 	if err != nil {
-		return config, nil
+		return nil, errors.Wrap(err, "Failed to get .ship-it file for configuration")
 	}
 	defer reader.Close()
 	decoder := yaml.NewDecoder(reader)
