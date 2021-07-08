@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/gommon/random"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	v1 "github.com/uniwise/go-ship-it/internal/rest/v1"
 )
 
 type Server interface {
@@ -30,11 +31,8 @@ func (s *ServerImpl) Serve() error {
 		return errors.Wrap(err, "Error creating github app client")
 	}
 
-	handler := NewHandler(atr, s.GithubSecret, s.Logger.WithField("subsystem", "handler"))
-
 	e := echo.New()
 	e.Use(middleware.Recover())
-
 	e.Use(middleware.RequestIDWithConfig(middleware.RequestIDConfig{
 		Skipper: middleware.DefaultSkipper,
 		Generator: func() string {
@@ -42,7 +40,8 @@ func (s *ServerImpl) Serve() error {
 		},
 	}))
 
-	e.POST("/github", handler.HandleGithub)
+	g := e.Group("/v1")
+	v1.Register(g, atr, s.GithubSecret, s.Logger.WithField("subsystem", "handler"))
 	e.GET("/", func(c echo.Context) error {
 		return c.String(http.StatusOK, "Ready to receive")
 	})

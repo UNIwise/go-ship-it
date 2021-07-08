@@ -4,11 +4,12 @@ WORKDIR /app
 COPY ["go.mod", "go.sum", "./"]
 RUN go mod download -x
 COPY . .
-RUN go build -o /build/server main.go
+RUN go build -o /build/ship-it main.go
 
 FROM alpine:3.12
 ENV GITHUB_APP_ID=86751
 ENV GITHUB_CERT_PATH=/keys/key.pem
-COPY --from=build /build/server /usr/local/bin/server
+COPY assets assets
+COPY --from=build /build/ship-it /usr/local/bin/ship-it
 
-ENTRYPOINT [ "server", "serve" ]
+ENTRYPOINT [ "ship-it", "serve" ]
