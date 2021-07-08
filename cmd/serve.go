@@ -37,6 +37,8 @@ var serveCmd = &cobra.Command{
 		logger.SetLevel(lvl)
 
 		switch viper.GetString("server.logformat") {
+		case "":
+			fallthrough
 		case "text":
 			logger.SetFormatter(&logrus.TextFormatter{})
 		case "json":
