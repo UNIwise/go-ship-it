@@ -1,4 +1,4 @@
-package rest
+package v1
 
 import (
 	"context"
@@ -12,35 +12,18 @@ import (
 	"github.com/uniwise/go-ship-it/internal/scm"
 )
 
-type WebhookHandler struct {
-	Secret        []byte
-	AppsTransport *ghinstallation.AppsTransport
-	Logger        *logrus.Entry
-}
-
-func NewHandler(atr *ghinstallation.AppsTransport, secret []byte, logger *logrus.Entry) *WebhookHandler {
-	return &WebhookHandler{
-		AppsTransport: atr,
-		Secret:        secret,
-		Logger:        logger,
-	}
-}
-
 type HandledGithubEvent interface {
 	GetInstallation() *github.Installation
 }
 
-func (h *WebhookHandler) initReleaser(c echo.Context, ev HandledGithubEvent, repo scm.Repo, ref string, entry *logrus.Entry) (*scm.Releaser, error) {
+func (h *Handler) initReleaser(c echo.Context, ev HandledGithubEvent, repo scm.Repo, ref string, entry *logrus.Entry) (*scm.Releaser, error) {
 	k := ghinstallation.NewFromAppsTransport(h.AppsTransport, ev.GetInstallation().GetID())
 	client := scm.NewGithubClient(&http.Client{Transport: k, Timeout: time.Minute}, repo)
 
 	return scm.NewReleaser(c.Request().Context(), client, ref, entry.WithField("repo", repo.GetFullName()))
 }
 
-func (h *WebhookHandler) HandleGithub(c echo.Context) error {
-	id := c.Response().Header().Get(echo.HeaderXRequestID)
-	entry := h.Logger.WithField("id", id)
-
+func (h *Handler) HandleGithub(c echo.Context, entry *logrus.Entry) error {
 	payload, err := github.ValidatePayload(c.Request(), h.Secret)
 	if err != nil {
 		return echo.ErrBadRequest.SetInternal(err)
