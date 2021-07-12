@@ -150,10 +150,17 @@ func (c *GithubClientImpl) GetPullsInCommitRange(ctx context.Context, commits []
 	return pulls, nil
 }
 
+var (
+	ErrFileMissing = errors.New("File missing in repository")
+)
+
 func (c *GithubClientImpl) GetFile(ctx context.Context, ref, file string) (io.ReadCloser, error) {
-	r, _, err := c.client.Repositories.DownloadContents(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), file, &github.RepositoryContentGetOptions{
+	r, o, err := c.client.Repositories.DownloadContents(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), file, &github.RepositoryContentGetOptions{
 		Ref: ref,
 	})
+	if o.StatusCode == http.StatusNotFound {
+		return nil, ErrFileMissing
+	}
 	return r, err
 }
 
