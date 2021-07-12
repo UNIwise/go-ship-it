@@ -20,7 +20,7 @@ func (h *Handler) initReleaser(c echo.Context, ev HandledGithubEvent, repo scm.R
 	k := ghinstallation.NewFromAppsTransport(h.AppsTransport, ev.GetInstallation().GetID())
 	client := scm.NewGithubClient(&http.Client{Transport: k, Timeout: time.Minute}, repo)
 
-	return scm.NewReleaser(c.Request().Context(), client, ref, entry.WithField("repo", repo.GetFullName()))
+	return scm.NewReleaser(c.Request().Context(), client, ref, entry)
 }
 
 func (h *Handler) HandleGithub(c echo.Context, entry *logrus.Entry) error {
@@ -36,9 +36,10 @@ func (h *Handler) HandleGithub(c echo.Context, entry *logrus.Entry) error {
 
 	switch event := event.(type) {
 	case *github.PushEvent:
-		r, err := h.initReleaser(c, event, event.GetRepo(), event.GetHead(), entry)
+		l := entry.WithField("repo", event.GetRepo().GetFullName())
+		r, err := h.initReleaser(c, event, event.GetRepo(), event.GetHead(), l)
 		if err != nil {
-			entry.WithError(err).Error("Could not initialize releaser")
+			l.WithError(err).Error("Could not initialize releaser")
 
 			return err
 		}
@@ -46,9 +47,10 @@ func (h *Handler) HandleGithub(c echo.Context, entry *logrus.Entry) error {
 
 		return c.String(http.StatusAccepted, "Handling push event")
 	case *github.ReleaseEvent:
-		r, err := h.initReleaser(c, event, event.GetRepo(), event.GetRelease().GetTagName(), entry)
+		l := entry.WithField("repo", event.GetRepo().GetFullName())
+		r, err := h.initReleaser(c, event, event.GetRepo(), event.GetRelease().GetTagName(), l)
 		if err != nil {
-			entry.WithError(err).Error("Could not initialize releaser")
+			l.WithError(err).Error("Could not initialize releaser")
 
 			return err
 		}
