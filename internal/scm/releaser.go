@@ -25,6 +25,7 @@ var (
 	configValidator = validator.New()
 	candidateRx     = regexp.MustCompile("^rc.(?P<candidate>[0-9]+)$")
 	changelogRx     = regexp.MustCompile("```release-note([\\s\\S]*?)```")
+	ErrConfMissing  = errors.New("Missing .ship-it file")
 )
 
 type LabelsConfig struct {
@@ -55,6 +56,9 @@ func getConfig(ctx context.Context, c GithubClient, ref string) (*Config, error)
 	}
 	reader, err := c.GetFile(ctx, ref, ".ship-it")
 	if err != nil {
+		if errors.Is(err, ErrFileMissing) {
+			return nil, ErrConfMissing
+		}
 		return nil, errors.Wrap(err, "Failed to get .ship-it file for configuration")
 	}
 	defer reader.Close()

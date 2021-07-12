@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -39,6 +40,11 @@ func (h *Handler) HandleGithub(c echo.Context, entry *logrus.Entry) error {
 		l := entry.WithField("repo", event.GetRepo().GetFullName())
 		r, err := h.initReleaser(c, event, event.GetRepo(), event.GetHead(), l)
 		if err != nil {
+			if errors.Is(err, scm.ErrConfMissing) {
+				l.WithError(err).Debug("Configuration missing from repository. Discarding event")
+
+				return c.String(http.StatusNotFound, ".ship-it missing from repo. Event discarded")
+			}
 			l.WithError(err).Error("Could not initialize releaser")
 
 			return err
@@ -50,6 +56,11 @@ func (h *Handler) HandleGithub(c echo.Context, entry *logrus.Entry) error {
 		l := entry.WithField("repo", event.GetRepo().GetFullName())
 		r, err := h.initReleaser(c, event, event.GetRepo(), event.GetRelease().GetTagName(), l)
 		if err != nil {
+			if errors.Is(err, scm.ErrConfMissing) {
+				l.WithError(err).Debug("Configuration missing from repository. Discarding event")
+
+				return c.String(http.StatusNotFound, ".ship-it missing from repo. Event discarded")
+			}
 			l.WithError(err).Error("Could not initialize releaser")
 
 			return err
