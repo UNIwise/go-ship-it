@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path"
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/google/go-github/v35/github"
@@ -150,15 +151,16 @@ func (c *GithubClientImpl) GetPullsInCommitRange(ctx context.Context, commits []
 	return pulls, nil
 }
 
-var (
-	ErrFileMissing = errors.New("File missing in repository")
-)
+var ErrFileMissing = errors.New("File missing in repository")
 
 func (c *GithubClientImpl) GetFile(ctx context.Context, ref, file string) (io.ReadCloser, error) {
 	r, o, err := c.client.Repositories.DownloadContents(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), file, &github.RepositoryContentGetOptions{
 		Ref: ref,
 	})
 	if o.StatusCode == http.StatusNotFound {
+		return nil, ErrFileMissing
+	}
+	if errors.Is(err, fmt.Errorf("No file named %s found in %s", path.Base(file), path.Dir(file))) {
 		return nil, ErrFileMissing
 	}
 	return r, err
