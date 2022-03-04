@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/google/go-github/v35/github"
+	"github.com/google/go-github/v43/github"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	validator "gopkg.in/go-playground/validator.v9"
@@ -37,10 +37,15 @@ type StrategyConf struct {
 	Type string `yaml:"type,omitempty" validate:"oneof=pre-release full-release"`
 }
 
+type ChangelogConf struct {
+	Type string `yaml:"type,omitempty" validate:"oneof=legacy github"`
+}
+
 type Config struct {
-	TargetBranch string       `yaml:"targetBranch,omitempty" validate:"required"`
-	Labels       LabelsConfig `yaml:"labels,omitempty"`
-	Strategy     StrategyConf `yaml:"strategy,omitempty"`
+	TargetBranch string        `yaml:"targetBranch,omitempty" validate:"required"`
+	Labels       LabelsConfig  `yaml:"labels,omitempty"`
+	Strategy     StrategyConf  `yaml:"strategy,omitempty"`
+	Changelog    ChangelogConf `yaml:"changelog,omitempty"`
 }
 
 func getConfig(ctx context.Context, c GithubClient, ref string) (*Config, error) {
@@ -52,6 +57,9 @@ func getConfig(ctx context.Context, c GithubClient, ref string) (*Config, error)
 		},
 		Strategy: StrategyConf{
 			Type: "pre-release",
+		},
+		Changelog: ChangelogConf{
+			Type: "github",
 		},
 	}
 	reader, err := c.GetFile(ctx, ref, ".ship-it")
@@ -118,11 +126,15 @@ func (r *Releaser) HandlePush(ctx context.Context, e *github.PushEvent) {
 	}
 	tagname, name := fmt.Sprintf("v%s", next.String()), next.String()
 
-	r.log.Debugf("Collecting changelog from %d PRs", len(pulls))
-	changelog, err := r.CollectChangelog(pulls)
-	if err != nil {
-		r.log.WithError(err).Error("Failed to collect changelog")
-		return
+	var changelog *string = nil
+	if r.config.Changelog.Type == "legacy" {
+		r.log.Debugf("Collecting changelog from %d PRs", len(pulls))
+		body, err := r.CollectChangelog(pulls)
+		if err != nil {
+			r.log.WithError(err).Error("Failed to collect changelog")
+			return
+		}
+		changelog = &body
 	}
 
 	r.log.Debugf("Creating tag '%s' at '%.7s'", tagname, e.GetAfter())
@@ -144,11 +156,12 @@ func (r *Releaser) HandlePush(ctx context.Context, e *github.PushEvent) {
 		"Prerelease": r.config.Strategy.Type == "pre-release",
 	}).Debugf("Creating release")
 	err = r.client.CreateRelease(ctx, &github.RepositoryRelease{
-		TagName:         github.String(tagname),
-		Name:            github.String(name),
-		TargetCommitish: github.String(strings.TrimPrefix(e.GetRef(), "refs/heads/")),
-		Prerelease:      github.Bool(r.config.Strategy.Type == "pre-release"),
-		Body:            github.String(changelog),
+		TagName:              github.String(tagname),
+		Name:                 github.String(name),
+		TargetCommitish:      github.String(strings.TrimPrefix(e.GetRef(), "refs/heads/")),
+		Prerelease:           github.Bool(r.config.Strategy.Type == "pre-release"),
+		Body:                 changelog,
+		GenerateReleaseNotes: github.Bool(r.config.Changelog.Type == "github"),
 	})
 	if err != nil {
 		r.log.WithError(err).Error("Failed to create release")

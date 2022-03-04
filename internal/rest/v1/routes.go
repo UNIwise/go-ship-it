@@ -1,7 +1,7 @@
 package v1
 
 import (
-	"github.com/bradleyfalzon/ghinstallation"
+	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/labstack/echo/v4"
 	"github.com/sirupsen/logrus"
 )

@@ -8,7 +8,7 @@ import (
 	"path"
 
 	semver "github.com/Masterminds/semver/v3"
-	"github.com/google/go-github/v35/github"
+	"github.com/google/go-github/v43/github"
 	"github.com/pkg/errors"
 )
 
@@ -121,7 +121,9 @@ func (c *GithubClientImpl) GetRefs(ctx context.Context, pattern string) ([]*gith
 }
 
 func (c *GithubClientImpl) GetCommitRange(ctx context.Context, base, head string) (*github.CommitsComparison, error) {
-	comparison, _, err := c.client.Repositories.CompareCommits(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), base, head)
+	comparison, _, err := c.client.Repositories.CompareCommits(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), base, head, &github.ListOptions{
+		PerPage: 200,
+	})
 	if err != nil {
 		return nil, err
 	}
