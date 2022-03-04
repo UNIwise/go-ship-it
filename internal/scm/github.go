@@ -129,7 +129,7 @@ func (c *GithubClientImpl) GetCommitRange(ctx context.Context, base, head string
 }
 
 func (c *GithubClientImpl) GetPullsInCommitRange(ctx context.Context, commits []*github.RepositoryCommit) ([]*github.PullRequest, error) {
-	max := 100
+	max := 500
 	if len(commits) < max {
 		max = len(commits)
 	}

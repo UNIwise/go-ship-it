@@ -1,1 +1,3 @@
 targetBranch: master
+strategy:
+  type: full-release

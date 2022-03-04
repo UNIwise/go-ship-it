@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://shipit.stage.wiseflow.io/v1/schema",
+  "$id": "https://shipit.stage.eu.wiseflow.io/v1/schema",
   "title": ".ship-it",
   "description": "The go ship it configuration file",
   "type": "object",
