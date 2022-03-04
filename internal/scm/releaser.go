@@ -42,7 +42,7 @@ type ChangelogConf struct {
 }
 
 type Config struct {
-	TargetBranch string        `yaml:"targetBranch,omitempty" validate:"required"`
+	TargetBranch string        `yaml:"targetBranch" validate:"required"`
 	Labels       LabelsConfig  `yaml:"labels,omitempty"`
 	Strategy     StrategyConf  `yaml:"strategy,omitempty"`
 	Changelog    ChangelogConf `yaml:"changelog,omitempty"`
