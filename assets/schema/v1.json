@@ -49,6 +49,19 @@
           ]
         }
       }
+    },
+    "changelog": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "default": "github",
+          "enum": [
+            "github",
+            "legacy"
+          ]
+        }
+      }
     }
   }
 }
