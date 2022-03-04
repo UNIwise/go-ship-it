@@ -111,8 +111,8 @@ func (r *Releaser) HandlePush(ctx context.Context, e *github.PushEvent) {
 		return
 	}
 
-	r.log.Debugf("Finding PRs in %d commits", len(comparison.Commits))
-	pulls, err := r.client.GetPullsInCommitRange(ctx, comparison.Commits)
+	r.log.Debugf("Finding PRs in %d commits", len(comparison))
+	pulls, err := r.client.GetPullsInCommitRange(ctx, comparison)
 	if err != nil {
 		r.log.WithError(err).Error("Failed to get pull requests in commit range")
 		return
@@ -209,8 +209,8 @@ func (r *Releaser) HandleRelease(ctx context.Context, e *github.ReleaseEvent) {
 			return
 		}
 
-		r.log.Debugf("Finding PRs in %d commits", len(comparison.Commits))
-		pulls, err := r.client.GetPullsInCommitRange(ctx, comparison.Commits)
+		r.log.Debugf("Finding PRs in %d commits", len(comparison))
+		pulls, err := r.client.GetPullsInCommitRange(ctx, comparison)
 		if err != nil {
 			r.log.WithError(err).Error("Failed to get pull requests in commit range")
 			return

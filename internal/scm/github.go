@@ -23,7 +23,7 @@ type GithubClient interface {
 	CreateRef(ctx context.Context, r *github.Reference) error
 	CreateRelease(ctx context.Context, r *github.RepositoryRelease) error
 	GetRefs(ctx context.Context, pattern string) ([]*github.Reference, error)
-	GetCommitRange(ctx context.Context, base, head string) (*github.CommitsComparison, error)
+	GetCommitRange(ctx context.Context, base, head string) ([]*github.RepositoryCommit, error)
 	GetPullsInCommitRange(ctx context.Context, commits []*github.RepositoryCommit) ([]*github.PullRequest, error)
 	GetLatestTag(ctx context.Context) (tag string, ver *semver.Version, err error)
 	GetFile(ctx context.Context, ref, file string) (io.ReadCloser, error)
@@ -120,14 +120,12 @@ func (c *GithubClientImpl) GetRefs(ctx context.Context, pattern string) ([]*gith
 	return c.paginateRefs(ctx, &github.ReferenceListOptions{Ref: pattern, ListOptions: github.ListOptions{PerPage: 25}})
 }
 
-func (c *GithubClientImpl) GetCommitRange(ctx context.Context, base, head string) (*github.CommitsComparison, error) {
-	comparison, _, err := c.client.Repositories.CompareCommits(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), base, head, &github.ListOptions{
-		PerPage: 200,
-	})
+func (c *GithubClientImpl) GetCommitRange(ctx context.Context, base, head string) ([]*github.RepositoryCommit, error) {
+	commits, err := c.paginateCommitRange(ctx, base, head, &github.ListOptions{PerPage: 25})
 	if err != nil {
 		return nil, err
 	}
-	return comparison, nil
+	return commits, nil
 }
 
 func (c *GithubClientImpl) GetPullsInCommitRange(ctx context.Context, commits []*github.RepositoryCommit) ([]*github.PullRequest, error) {
@@ -232,4 +230,24 @@ func (c *GithubClientImpl) paginateRefs(ctx context.Context, opts *github.Refere
 		page = out.NextPage
 	}
 	return references, nil
+}
+
+func (c *GithubClientImpl) paginateCommitRange(ctx context.Context, base, head string, opts *github.ListOptions) ([]*github.RepositoryCommit, error) {
+	page := 0
+	commits := []*github.RepositoryCommit{}
+	for {
+		comparison, out, err := c.client.Repositories.CompareCommits(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), base, head, &github.ListOptions{
+			Page:    page,
+			PerPage: opts.PerPage,
+		})
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to paginate comparison")
+		}
+		commits = append(commits, comparison.Commits...)
+		if out.NextPage == 0 {
+			break
+		}
+		page = out.NextPage
+	}
+	return commits, nil
 }
