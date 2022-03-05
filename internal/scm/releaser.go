@@ -308,9 +308,19 @@ func (r *Releaser) Promote(ctx context.Context, release *github.RepositoryReleas
 		return nil, errors.Wrapf(err, "Failed to create reference '%s'", full.String())
 	}
 
+	var changelog *string = nil
+	if r.config.Changelog.Type == "github" {
+		notes, err := r.client.GenerateReleaseNotes(ctx, fmt.Sprintf("v%s", full.String()))
+		if err != nil {
+			return nil, errors.Wrapf(err, "Failed to generate release notes for '%s'", full.String())
+		}
+		changelog = &notes.Body
+	}
+
 	rel, err := r.client.EditRelease(ctx, release.GetID(), &github.RepositoryRelease{
 		TagName: github.String(fmt.Sprintf("v%s", full.String())),
 		Name:    github.String(full.String()),
+		Body:    changelog,
 	})
 	if err != nil {
 		return nil, errors.Wrapf(err, "Failed to edit release '%d'", release.GetID())
