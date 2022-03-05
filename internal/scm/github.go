@@ -27,6 +27,7 @@ type GithubClient interface {
 	GetPullsInCommitRange(ctx context.Context, commits []*github.RepositoryCommit) ([]*github.PullRequest, error)
 	GetLatestTag(ctx context.Context) (tag string, ver *semver.Version, err error)
 	GetFile(ctx context.Context, ref, file string) (io.ReadCloser, error)
+	GenerateReleaseNotes(ctx context.Context, curr string) (*github.RepositoryReleaseNotes, error)
 	GetRepo() Repo
 }
 
@@ -49,6 +50,16 @@ func NewGithubClient(tc *http.Client, repo Repo) *GithubClientImpl {
 		client: cl,
 		repo:   repo,
 	}
+}
+
+func (c *GithubClientImpl) GenerateReleaseNotes(ctx context.Context, curr string) (*github.RepositoryReleaseNotes, error) {
+	notes, _, err := c.client.Repositories.GenerateReleaseNotes(ctx, c.repo.GetOwner().GetLogin(), c.repo.GetName(), &github.GenerateNotesOptions{
+		TagName: curr,
+	})
+	if err != nil {
+		return nil, errors.Wrapf(err, "Failed to generate release notes for tag '%s'", curr)
+	}
+	return notes, nil
 }
 
 func (c *GithubClientImpl) CreateMilestone(ctx context.Context, title string) (*github.Milestone, error) {
