@@ -309,8 +309,9 @@ func (r *Releaser) Promote(ctx context.Context, release *github.RepositoryReleas
 	}
 
 	rel, err := r.client.EditRelease(ctx, release.GetID(), &github.RepositoryRelease{
-		TagName: github.String(fmt.Sprintf("v%s", full.String())),
-		Name:    github.String(full.String()),
+		TagName:              github.String(fmt.Sprintf("v%s", full.String())),
+		Name:                 github.String(full.String()),
+		GenerateReleaseNotes: github.Bool(r.config.Changelog.Type == "github"),
 	})
 	if err != nil {
 		return nil, errors.Wrapf(err, "Failed to edit release '%d'", release.GetID())
