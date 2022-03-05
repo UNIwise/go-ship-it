@@ -1,3 +1,5 @@
+![](https://api.stage.eu.wiseflow.io/badges/v1/namespace/go-ship-it/deployment/go-ship-it)
+
 # Go ship it!
 
 ![logo](docs/logo.png)
