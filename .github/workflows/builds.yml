@@ -1,4 +1,4 @@
-name: CI
+name: Build
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
     branches:
       - "master"
 jobs:
-  build:
+  docker:
     runs-on: self-hosted
     steps:
       - name: Set up QEMU
@@ -38,3 +38,5 @@ jobs:
         with:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
+          cache-to: type=registry,ref=docker.wiseflow.io/k8s/go-ship-it:cache,mode=max
+          cache-from: type=registry,ref=docker.wiseflow.io/k8s/go-ship-it:cache
