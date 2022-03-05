@@ -38,5 +38,5 @@ jobs:
         with:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
-          cache-to: type=registry,ref=docker.wiseflow.io/k8s/go-ship-it:cache,mode=max
+          cache-to: type=registry,ref=docker.wiseflow.io/k8s/go-ship-it:cache,mode=max,oci-mediatypes=false
           cache-from: type=registry,ref=docker.wiseflow.io/k8s/go-ship-it:cache
