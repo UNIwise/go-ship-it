@@ -1,0 +1,42 @@
+name: Build
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  pull_request:
+    branches:
+      - "master"
+jobs:
+  docker:
+    runs-on: self-hosted
+    steps:
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v3
+        with:
+          # list of Docker images to use as base name for tags
+          images: |
+            docker.wiseflow.io/go-ship-it
+          # generate Docker tags based on the following events/attributes
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+      - name: Login to Harbor
+        uses: docker/login-action@v1
+        with:
+          registry: docker.wiseflow.io
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v2
+        with:
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-to: type=registry,ref=docker.wiseflow.io/k8s/go-ship-it:cache,mode=max,oci-mediatypes=false
+          cache-from: type=registry,ref=docker.wiseflow.io/k8s/go-ship-it:cache
